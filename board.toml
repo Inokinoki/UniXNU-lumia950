@@ -1,0 +1,43 @@
+# Board description of the Microsoft Lumia 950 (MSM8992, Snapdragon 808), read by the unixnu
+# build driver.
+#
+# P1 research skeleton. The incomplete-board guard is intentional: this board cannot build a
+# boot image yet, and it must not pretend to. Unknown sections are absent rather than filled
+# with zero addresses or invented hashes. Remove `example = true` only when every section
+# below exists and has been checked on hardware.
+
+[board]
+name = "lumia950"
+soc = "MSM8992"
+description = "Microsoft Lumia 950 — P1 build research"
+kit = "lumia950"                   # package/ of this repository becomes kits/lumia950
+example = true
+
+[kernel]
+defconfig = "lumia950_defconfig"
+# Archive builders of the kernel step, in order. ArmDTPlatform is the platform expert that
+# consumes the ADT; ArmCpu owns the CPU, timer and interrupt path; NativeSdhci is this
+# device's eMMC driver (see drivers/NativeSdhci and README.md).
+archives = [
+  "scripts/build-arm-driver.py ArmDTPlatform",
+  "scripts/build-arm-driver.py ArmCpu",
+  "scripts/build-arm-driver.py NativeSdhci",
+  # "scripts/build-arm-driver.py NativeRamBlock",   # Data volume; also needs the virtio bindings builder
+]
+# TODO: qualify the prelink policy and the original kernelcache hash for the chosen IPSW.
+# TODO: choose the IPSW identity independently; do not inherit sheng's identifiers. The
+#       [ipsw] section wants url, product, version, build, device_class, chip_id and board_id
+#       for a real image, so it is absent until that image is chosen and pinned.
+# TODO: obtain the real userdata GPT geometry (first_lba, last_lba) read-only from the phone.
+
+# TODO: [firmware]. UniXNU ports start from a Mu-Silicium UEFI port, and Mu-Silicium has no
+#       MSM8992 target today. The Lumia 950 has its own EDK2 firmware (Lumia950XLPkg) that
+#       already reaches a boot menu, a framebuffer and the eMMC; wiring UniXNUDxe and
+#       DarwinBoot into that tree is the decision this port has to make first. Until it is
+#       made, the keys config, dsc, fd and packages cannot be named.
+
+# TODO: [payload] and [payload.adt]. The ADT generator (make-lumia950-adt.py) has to emit the
+#       Apple node encoding with this SoC's addresses, a /chosen NVRAM proxy, the memory-map
+#       placeholders and the identity properties. The node spec for it is in README.md.
+#       dram_size must come from the firmware's memory map, not from the 3 GiB marketing
+#       figure: reserved regions carve into it.

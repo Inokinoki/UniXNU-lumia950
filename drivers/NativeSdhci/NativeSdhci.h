@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+#ifndef NATIVE_SDHCI_H
+#define NATIVE_SDHCI_H
+
+#include <IOKit/IOLib.h>
+#include <IOKit/IOService.h>
+#include <IOKit/IOMemoryMap.h>
+#include <IOKit/storage/IOBlockStorageDevice.h>
+
+class NativeSdhci : public IOBlockStorageDevice {
+    OSDeclareDefaultStructors(NativeSdhci)
+
+public:
+    bool start(IOService *provider) override;
+    void stop(IOService *provider) override;
+    void free() override;
+
+    // IOBlockStorageDevice
+    IOReturn doEjectMedia() override { return kIOReturnUnsupported; }
+    IOReturn doFormatMedia(UInt64) override { return kIOReturnUnsupported; }
+    UInt32   doGetFormatCapacities(UInt64 *, UInt32) const override { return 0; }
+    char    *getVendorString() override { return const_cast<char *>("Native"); }
+    char    *getProductString() override { return const_cast<char *>("Lumia 950 eMMC"); }
+    char    *getRevisionString() override { return const_cast<char *>("0.1"); }
+    char    *getAdditionalDeviceInfoString() override { return const_cast<char *>("write path not implemented"); }
+    IOReturn reportBlockSize(UInt64 *value) override;
+    IOReturn reportEjectability(bool *value) override;
+    IOReturn reportMaxValidBlock(UInt64 *value) override;
+    IOReturn reportMediaState(bool *present, bool *changed) override;
+    IOReturn reportRemovability(bool *value) override;
+    IOReturn reportWriteProtection(bool *value) override;
+    IOReturn doSynchronizeCache() override { return online ? kIOReturnSuccess : kIOReturnNotReady; }
+    IOReturn doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 count,
+                              IOStorageAttributes *attributes, IOStorageCompletion *completion) override;
+
+private:
+    // Register access. SDHCI mixes 8-, 16- and 32-bit registers, so the width is
+    // explicit rather than derived from a 32-bit read.
+    uint8_t  readHc8(uint32_t offset) const;
+    uint16_t readHc16(uint32_t offset) const;
+    uint32_t readHc32(uint32_t offset) const;
+    void     writeHc8(uint32_t offset, uint8_t value);
+    void     writeHc16(uint32_t offset, uint16_t value);
+    void     writeHc32(uint32_t offset, uint32_t value);
+    uint32_t readCore32(uint32_t offset) const;
+
+    bool mapWindows(IOService *provider);
+    void logHost();
+    void resetCommandLine();
+
+    // One command, polled to completion: interrupt delivery is not part of this
+    // bring-up rung, because the SoC is GICv2 and the GIC path is the open
+    // question those interrupts depend on.
+    bool sendCommand(uint8_t index, uint32_t argument, uint16_t flags, uint32_t response[4]);
+    bool waitPresent(uint32_t mask, uint32_t value, uint32_t timeoutUs);
+    void clearInterrupts();
+
+    bool readBlockPio(uint64_t lba, void *bytes);
+    bool readCsd(uint16_t rca, uint32_t csd[4]);
+    bool readExtCsd(uint32_t extCsd[128]);
+    bool probeCard();
+
+    IOLock            *gate = nullptr;
+    volatile uint8_t  *hc = nullptr;
+    volatile uint8_t  *core = nullptr;
+    IOMemoryMap       *hcMap = nullptr;
+    IOMemoryMap       *coreMap = nullptr;
+
+    uint32_t baseClockHz = 0;
+    uint16_t hostVersion = 0;
+    uint16_t relativeAddress = 0;
+    uint64_t capacityBytes = 0;
+    uint64_t blockCount = 0;
+    bool     online = false;
+    bool     writeRefused = false;
+};
+
+#endif // NATIVE_SDHCI_H

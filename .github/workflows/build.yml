@@ -1,0 +1,176 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  # Keep build output outside both checkouts' defaults, so the paths are the same
+  # on every runner and the artifact globs below stay simple.
+  UNIXNU_OUT: ${{ github.workspace }}/out
+
+jobs:
+  # Fast checks that run everywhere. These need no Xcode and no phone.
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: main
+          path: unixnu
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Parse board.toml and the defconfig
+        run: |
+          python3 - <<'PY'
+          import pathlib, tomllib
+          board = tomllib.loads(pathlib.Path("board.toml").read_text())
+          assert board["board"]["name"] == "lumia950", board["board"]
+          assert board["kernel"]["defconfig"] == "lumia950_defconfig"
+          config = pathlib.Path("configs/lumia950_defconfig").read_text().splitlines()
+          keys = [line.split("=", 1)[0].strip() for line in config
+                  if line.strip() and not line.startswith("#")]
+          assert "CONFIG_XNU_NATIVE_SDHCI" in keys, keys
+          assert "CONFIG_XNU_BUILD_ARCHIVES" in keys, keys
+          print("board.toml and defconfig: ok")
+          PY
+
+      - name: Check the build scripts
+        run: python3 -m py_compile scripts/build-arm-driver.py
+
+      - name: Host test of the driver core
+        run: |
+          mkdir -p build
+          g++ -std=c++17 -Wall -Wextra -Werror -I drivers/NativeSdhci \
+              drivers/NativeSdhci/Test/check-sdhci-core.cpp \
+              drivers/NativeSdhci/SdhciCore.cpp -o build/check-sdhci-core
+          ./build/check-sdhci-core
+
+      - name: The build driver accepts this board
+        run: |
+          cd unixnu
+          python3 unixnu defconfig lumia950_defconfig -D "$GITHUB_WORKSPACE"
+          python3 unixnu status -D "$GITHUB_WORKSPACE" | tee status.txt
+          grep -q "driver   NativeSdhci              device" status.txt
+
+      - name: The incomplete-board guard still holds
+        run: |
+          # example = true must keep build and bootimg refused until the board is real.
+          cd unixnu
+          set +e
+          out=$(python3 unixnu build kernel --dry-run -D "$GITHUB_WORKSPACE" 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::build ran for an example board"
+            exit 1
+          fi
+          echo "$out" | grep -q "EXAMPLE device repository"
+
+  # The real compile. The kernel step needs macOS: Xcode and the iphoneos SDK.
+  # Manual, because a first build takes a long time on a shared runner.
+  kernel:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: main
+          path: unixnu
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Report the runner toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcode-select -p
+
+      - name: Install host tools
+        run: |
+          brew install cmake ninja unifdef llvm mtools dtc
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
+
+      - name: Select the device and fetch the Apple references
+        run: |
+          cd unixnu
+          python3 unixnu defconfig lumia950_defconfig -D "$GITHUB_WORKSPACE"
+          python3 unixnu fetch xnu libplatform libdispatch AvailabilityVersions \
+              libpthread corecrypto-2023 IOStorageFamily -D "$GITHUB_WORKSPACE"
+
+      - name: Build the kernel and the device archives
+        # The board has no [kernel.prelink] section yet: that needs the target IPSW
+        # identity and its original kernelcache. `unixnu build kernel` compiles XNU,
+        # runs the archive builders and links, then stops at prelink. The archive is
+        # the artifact this job exists to produce, so the run tolerates exactly that
+        # one failure and nothing else.
+        run: |
+          cd unixnu
+          set +e
+          python3 unixnu build kernel -D "$GITHUB_WORKSPACE" 2>&1 | tee "$GITHUB_WORKSPACE/kernel.log"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          archive=$(find "$UNIXNU_OUT" -name 'libNativeSdhci.a' -print -quit || true)
+          if [ -z "$archive" ]; then
+            echo "::error::NativeSdhci was not compiled; the kernel step failed before the archives"
+            exit 1
+          fi
+          echo "archive: $archive"
+
+          if [ "$status" -ne 0 ]; then
+            if grep -q "kernel.prelink" "$GITHUB_WORKSPACE/kernel.log"; then
+              echo "kernel step stopped at the prelink gate, as expected for this board"
+            else
+              echo "::error::the kernel step failed for a reason other than prelink"
+              exit 1
+            fi
+          fi
+
+      - name: Record what the driver compiled against
+        run: |
+          find "$UNIXNU_OUT" -name 'libNativeSdhci.a' -exec shasum -a 256 {} \;
+          grep -h "NativeSdhci\|archive" "$UNIXNU_OUT"/*/logs/archive-*.log | tail -20 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumia950-native-sdhci
+          path: |
+            out/*/tree/build/native-sdhci/**
+            out/*/logs/**
+            kernel.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove fetched sources
+        if: always()
+        run: |
+          rm -rf out/ipsw out/feeds out/*/tree
+          rm -f unixnu/unixnu.lock

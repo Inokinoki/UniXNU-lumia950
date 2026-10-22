@@ -1,0 +1,10 @@
+build/
+out/
+.cache/
+unixnu/
+*.o
+*.a
+*.exe
+*.log
+status.txt
+__pycache__/

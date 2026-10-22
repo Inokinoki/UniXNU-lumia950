@@ -1,0 +1,22 @@
+# Kernel configuration of the lumia950 image. CONFIG_XNU_<NAME> becomes XNU_<NAME> for the
+# kernel build.
+#
+# This is the storage-bring-up configuration: the platform expert, the CPU and interrupt
+# path, and the eMMC driver. Everything that needs a working display, userland or power
+# management is deliberately absent.
+
+CONFIG_XNU_ARM_DT_PLATFORM=y
+CONFIG_XNU_ARMCPU=y
+CONFIG_XNU_NATIVE_SDHCI=y
+
+# Run the archive builders of [kernel] archives. NativeSdhci is compiled by
+# scripts/build-arm-driver.py against the compile records of the XNU pass.
+CONFIG_XNU_BUILD_ARCHIVES=y
+
+# The Data volume is a RAM block until the eMMC write path exists.
+# CONFIG_XNU_NATIVE_RAM_BLOCK is not set
+
+CONFIG_XNU_ARMVIRT_PLATFORM=n
+
+# The kernel is linked against the prelinked kernelcache of the target image.
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
