@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    # Both manual jobs are long (edk2 and the macOS Xcode build) and are wanted
+    # separately, so a dispatch names which one to run instead of starting both.
+    inputs:
+      target:
+        description: Which manual job to run
+        type: choice
+        options: [payload, kernel, both]
+        default: payload
 
 permissions:
   contents: read
@@ -67,7 +75,14 @@ jobs:
           PY
 
       - name: Check the build scripts
-        run: python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py
+        run: |
+          python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py scripts/check-payload.py
+          bash -n scripts/build-payload.sh
+
+      - name: Check the chainload payload configuration
+        # The keys and enums are the ones UniXNULib/Config.c reads, so a typo fails here
+        # rather than as an error line on a phone screen.
+        run: python3 scripts/check-payload.py
 
       - name: Host test of the driver core
         run: |
@@ -99,10 +114,68 @@ jobs:
           fi
           echo "$out" | grep -q "EXAMPLE device repository"
 
+  # The chainload payload: UniXNU.efi, DarwinBoot.efi and unixnu.toml in the EFIESP layout.
+  # Manual like the kernel job: it clones edk2 and builds BaseTools, which is minutes of
+  # runner time for files that only change when the menu or the loader does.
+  payload:
+    if: github.event_name == 'workflow_dispatch' && (inputs.target == 'payload' || inputs.target == 'both')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UNIXNU_EDK2: ${{ github.workspace }}/edk2
+      UNIXNU_SOURCE: ${{ github.workspace }}/unixnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: main
+          path: unixnu
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the EDK II host toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential uuid-dev nasm iasl clang lld llvm
+          clang --version | head -1
+          ld.lld --version | head -1
+
+      - name: Fetch the DarwinBoot submodule
+        run: git -C unixnu submodule update --init --depth 1 drivers/DarwinBoot
+
+      - name: Fetch edk2
+        # package/build.sh names release/202608 and checks for MdePkg/BaseFdtLib and
+        # MipiSysTLib, so those submodules are initialized with it.
+        run: |
+          git clone --depth 1 --branch release/202608 \
+            https://github.com/microsoft/mu_basecore "$UNIXNU_EDK2"
+          git -C "$UNIXNU_EDK2" submodule update --init --depth 1 \
+            MdePkg/Library/BaseFdtLib/libfdt \
+            MdePkg/Library/MipiSysTLib/mipisyst \
+            BaseTools/Source/C/BrotliCompress/brotli
+          if [ -f "$UNIXNU_EDK2/pip-requirements.txt" ]; then
+            python3 -m pip install --user -q -r "$UNIXNU_EDK2/pip-requirements.txt"
+          fi
+
+      - name: Build and stage the payload
+        run: bash scripts/build-payload.sh out/payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumia950-payload
+          path: out/payload/**
+          if-no-files-found: error
+          retention-days: 7
+
   # The real compile. The kernel step needs macOS: Xcode and the iphoneos SDK.
   # Manual, because a first build takes a long time on a shared runner.
   kernel:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (inputs.target == 'kernel' || inputs.target == 'both')
     runs-on: macos-latest
     timeout-minutes: 360
     env:

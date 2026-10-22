@@ -1,23 +1,65 @@
 # UniXNU-lumia950
 
 Device repository for the Microsoft Lumia 950 (MSM8992, Snapdragon 808), targeting the
-UniXNU stack: an AArch64 UEFI firmware, the UniXNU boot manager, DarwinBoot and a patched
-XNU running an iOS userland.
+UniXNU stack: the phone's own AArch64 UEFI, the UniXNU boot manager, DarwinBoot and a
+patched XNU running an iOS userland.
 
 This is a **P1 research skeleton**. `board.toml` keeps `example = true`, so the build driver
 refuses to build or boot-image it — that is the intended guard, not an oversight. What is
 here is the part that could be built and checked without the phone: the device repository
-structure, the register map with its sources, and the eMMC driver's host-testable core.
+structure, the register map with its sources, the eMMC driver's host-testable core, and now
+the chainload payload with its build and configuration checks.
+
+## The boot route
+
+The phone boots through its **own** UEFI, not through a firmware this repository builds.
+Lumia950XLPkg already brings the MSM8992 up far enough to show a menu and to start EFI
+applications from FAT on EFIESP — that is how Windows boots on these phones. The payload is
+therefore plain files on that partition, launched from that menu:
+
+| Path on EFIESP | File | Built by |
+| --- | --- | --- |
+| `\EFI\UniXNU\UniXNU.efi` | the menu | `package/build.sh` in the UniXNU checkout |
+| `\EFI\UniXNU\unixnu.toml` | its configuration | [payload/EFI/UniXNU/unixnu.toml](payload/EFI/UniXNU/unixnu.toml) |
+| `\EFI\UniXNU\Drivers\DarwinBoot.efi` | the loader, named in the config only once a kernel exists | `DarwinBootPkg/DarwinBoot.dsc` |
+
+Mu-Silicium is not the base: it has no MSM8992 target, and its installation model is an
+Android boot image that an Android bootloader loads with `fastboot`, which a Lumia does not
+have. Chainloading also keeps the experiment reversible — nothing is flashed.
+
+Two firmware services decide whether the menu can work, and neither has been observed on
+this phone:
+
+| Service | It decides | If it is missing |
+| --- | --- | --- |
+| `EFI_GRAPHICS_OUTPUT_PROTOCOL` | whether the menu draws | `[ui] console = "text"` falls back to UGA text, or nothing appears |
+| `EFI_SIMPLE_TEXT_IN_PROTOCOL` | whether keys reach the menu | the countdown runs out and the default entry exits to the firmware |
+
+UniXNU's menu reads `ConIn`; touch arrives as an absolute pointer, which the menu does not
+consume. The Lumia's buttons reach it only if the firmware publishes them as a text input
+device.
+
+### Deploying it
+
+Unlocking the bootloader and mounting EFIESP in Mass Storage Mode are prerequisites and are
+not in this repository. That is the one step in the whole plan that can brick the phone.
+
+1. Unlock with WPInternals and mount EFIESP in Mass Storage Mode.
+2. Copy `out/payload/EFI/UniXNU` to `\EFI\UniXNU` on EFIESP, or onto the microSD card.
+3. Add an entry for `\EFI\UniXNU\UniXNU.efi` to the Lumia950XLPkg boot menu.
+4. Boot it: the menu should appear for 20 s and then hand control back to the firmware.
+5. To revert, delete the directory. No firmware image is modified.
 
 ## State
 
 | Layer | State |
 | --- | --- |
 | Device repository | `board.toml`, defconfig, `NativeSdhci`, build and test scripts; accepted by `unixnu status` as `[EXAMPLE]` |
-| UEFI firmware | not started; needs a decision (see [Blockers](#blockers)) |
-| UniXNU menu | blocked on firmware |
-| DarwinBoot | blocked on firmware |
-| XNU entry | blocked on firmware and the GICv2 question |
+| UEFI firmware | not built here; the phone's own Lumia950XLPkg starts the payload |
+| Chainload payload | config, checker and build script written; the two EFI binaries are built by the `payload` job and have not been loaded by a phone |
+| UniXNU menu | not yet built or run; the `payload` job builds it, and its first run is pending |
+| DarwinBoot | not yet built or run; same job, same pending run |
+| XNU entry | blocked on the kernel line and the GICv2 question |
 | Storage driver | written, host-tested, never run on hardware |
 | Root volume and userland | not started |
 
@@ -29,7 +71,9 @@ structure, the register map with its sources, and the eMMC driver's host-testabl
 | Board and defconfig parse | `unixnu defconfig lumia950_defconfig -D lumia950` | accepted |
 | Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device` |
 | Incomplete-board guard | `unixnu build kernel --dry-run -D lumia950` | refused, as designed |
-| CI workflow file | YAML parse, `bash -n` on all 12 run blocks | clean |
+| CI workflow file | YAML parse, `bash -n` on all 17 run blocks | clean |
+| Chainload payload configuration | `python3 scripts/check-payload.py` | accepted; the keys and enums are the ones `UniXNULib/Config.c` reads |
+| Payload staging | `stage-esp.py` and `check-payload.py --payload-dir` on fixture EFI files | tree staged at `EFI/UniXNU` and accepted |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
 | XNU kernel link | same run | links with the board archives |
 
@@ -82,7 +126,10 @@ lumia950/
     NativeSdhci.{h,cpp}             IOKit driver: warm handoff, PIO reads
     Info.plist                      personality for `qcom,msm8994-sdhci`
     Test/check-sdhci-core.cpp       host test for the core
+  payload/EFI/UniXNU/unixnu.toml    chainload config, in the layout it deploys as
   scripts/build-arm-driver.py       compile a driver against the recorded XNU ABI
+  scripts/build-payload.sh          EDK II build and staging for the two EFI binaries
+  scripts/check-payload.py          config and staged-tree check
   scripts/test-core.bat             host test runner (Windows)
 ```
 
@@ -193,12 +240,13 @@ present or anything calling `gethostuuid()` blocks forever.
 
 ## Blockers
 
-1. **Firmware has no Mu-Silicium target.** Every UniXNU device starts from a Mu-Silicium
-   UEFI port, and Mu-Silicium has no MSM8992 target. The Lumia's own EDK2 firmware
-   (Lumia950XLPkg) already reaches a menu, a framebuffer and the eMMC, and is the obvious
-   base — but it is not the same tree, so UniXNUDxe and DarwinBoot have to be added to it,
-   or a Lumia target has to be added to Mu-Silicium. Pick one before writing more of
-   `[firmware]`.
+1. **The route is decided; the firmware environment is not measured.** The phone boots its
+   own Lumia950XLPkg UEFI and that firmware starts `UniXNU.efi` from EFIESP. Because this
+   repository builds no firmware volume, `[firmware]` and `unixnu bootimg` stay unused and
+   `example = true` stays until the payload has run. What is unproven is the environment the
+   application gets: whether GOP still describes the panel, whether any `ConIn` device exists
+   for the menu, and whether the boot manager holds an entry for the application or needs
+   `UniXNUDxe` to register one.
 2. **The interrupt controller is GICv2** (`qcom,msm-qgic2`, no redistributors). ArmCpu's GIC
    path is the generic GICv3 one on every ported board, so interrupts — including the eMMC
    completion interrupt — are gated on that work. Polling keeps the storage rung moving
@@ -213,16 +261,18 @@ present or anything calling `gethostuuid()` blocks forever.
    Mac. `unixnu` on Windows can plan, not build.
 6. **No hardware in this loop.** Every remaining rung needs the phone.
 
-## Building on a macOS runner
+## The CI jobs
 
 There is no Mac here, and the kernel step needs one — Xcode plus the iphoneos SDK. Upstream
-solves this with a macOS GitHub Actions runner, so this repository carries
-[.github/workflows/build.yml](.github/workflows/build.yml) with two jobs:
+solves that with a macOS runner, and the payload needs an EDK II toolchain that Windows does
+not have either, so this repository carries
+[.github/workflows/build.yml](.github/workflows/build.yml) with three jobs:
 
 | Job | Runner | Trigger | What it does |
 | --- | --- | --- | --- |
 | `validate` | `ubuntu-latest` | every push and pull request | parses `board.toml` and the defconfig, compiles and runs the core test, checks that the build driver accepts the board, and that the `example` guard still refuses to build |
-| `kernel` | `macos-latest` | manual (`workflow_dispatch`) | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, and links |
+| `payload` | `ubuntu-latest` | manual, `target=payload` (the default) | installs clang, lld and the EDK II host tools, clones Mu_Basecore, builds `UniXNU.efi` and `DarwinBoot.efi`, stages `out/payload` and checks it |
+| `kernel` | `macos-latest` | manual, `target=kernel` | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, and links |
 
 The `kernel` job compiles and links, then stops at the prelink gate because the board has no
 `[kernel.prelink]` while the source pin is 17.x. That one stop is tolerated and every other
@@ -232,11 +282,14 @@ lands, the prelink section and its pin return and the gate goes away.
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.
 
-Trigger it from **Actions → build → Run workflow**, or with the CLI:
+Trigger a job from **Actions → build → Run workflow**, or with the CLI. The dispatch input
+picks the job, so a payload build does not also start the six-hour macOS one:
 
 ```sh
-gh workflow run build.yml
+gh workflow run build.yml -f target=payload
 gh run watch
+
+gh workflow run build.yml -f target=kernel
 ```
 
 ## Commands
@@ -251,6 +304,6 @@ py -3 unixnu build kernel --dry-run -D ../lumia950     # refuses: example = true
 cd lumia950 && scripts\test-core.bat
 ```
 
-Once the firmware question is settled and the board is no longer `example = true`, the
-kernel step is `unixnu build kernel` on macOS, and the hardware rung is a boot image plus the
-phone.
+The hardware rung is the staged payload on EFIESP, not a boot image: `unixnu bootimg` packs a
+firmware volume for an Android bootloader, and a Lumia has none. The kernel step stays
+`unixnu build kernel` on macOS.

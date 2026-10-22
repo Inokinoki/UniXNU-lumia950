@@ -1,0 +1,68 @@
+# UniXNU configuration for the Lumia 950 chainload route.
+#
+# This tree is copied to \EFI\UniXNU on the EFIESP partition (or the microSD card) and
+# started as an EFI application by the Lumia950XLPkg boot manager. It is not a
+# Mu-Silicium boot image: the firmware is the Lumia's own, and the payload is plain FAT
+# files, so nothing here has to be flashed.
+#
+# Every key below is one UniXNULib/Config.c reads; `scripts/check-payload.py` checks that
+# against the parser, and the CI payload job stages the tree and re-checks it there.
+
+version = 1
+
+[boot]
+# The menu is the milestone: it has to prove on the panel that UniXNU starts, finds this
+# file, draws through the firmware GOP and gets input. 20 s leaves time to photograph it,
+# then the default entry hands control back to the firmware menu.
+timeout = 20
+fallback_timeout = 10
+connect_all = true
+default = "exit"
+
+[ui]
+title = "UniXNU"
+logo = true
+# 1440x2560 is ratio 562, below portrait_below, so auto already picks the portrait card
+# layout. It is spelled out rather than left implicit because that is the layout being judged.
+layout = "auto"
+console = "auto"
+
+[kits]
+autoload = false
+
+# Stage 2, once the kernel line is open and DarwinBoot is staged at
+# \EFI\UniXNU\Drivers\DarwinBoot.efi. The driver registers the loader protocol; the entry
+# below hands it the kernel, the .adt sidecar and the boot arguments.
+#
+# [[driver]]
+# path = "Drivers/DarwinBoot.efi"
+# connect = true
+#
+# [[entry]]
+# id = "xnu"
+# title = "iOS 16.7.16"
+# type = "xnu"
+# path = "Payloads/kernel.macho"
+# args = "-v"
+
+# A loaded configuration replaces the built-in menu, and with it the built-in Restart and
+# Power off entries, so they are repeated here. Both are firmware ResetSystem calls; the
+# phone has no PSCI SYSTEM_OFF, so a firmware that does not implement EfiResetShutdown
+# turns "Power off" into a cold reset or nothing at all.
+[[entry]]
+id = "exit"
+title = "Exit to firmware"
+type = "action"
+action = "exit"
+
+[[entry]]
+id = "reset"
+title = "Restart"
+type = "action"
+action = "reset"
+
+[[entry]]
+id = "shutdown"
+title = "Power off"
+type = "action"
+action = "shutdown"

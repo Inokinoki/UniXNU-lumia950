@@ -1,7 +1,9 @@
 build/
 out/
 .cache/
-unixnu/
+# The UniXNU checkout beside this repository, not every directory named unixnu: the payload
+# tree has payload/EFI/UniXNU, which must stay tracked.
+/unixnu/
 *.o
 *.a
 *.exe

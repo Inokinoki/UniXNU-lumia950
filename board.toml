@@ -62,14 +62,19 @@ fetch = ["KernelCache"]
 #       (osfmk/arm64/sptm/pmap/pmap.c) does not exist there, and the NativePrelink patches
 #       are named for xnu-10063.141.1.
 
-# TODO: [firmware]. UniXNU ports start from a Mu-Silicium UEFI port, and Mu-Silicium has no
-#       MSM8992 target today. The Lumia 950 has its own EDK2 firmware (Lumia950XLPkg) that
-#       already reaches a boot menu, a framebuffer and the eMMC; wiring UniXNUDxe and
-#       DarwinBoot into that tree is the decision this port has to make first. Until it is
-#       made, the keys config, dsc, fd and packages cannot be named.
+# [firmware] stays absent on purpose. The route is chainload: the phone's own UEFI
+# (Lumia950XLPkg) starts \EFI\UniXNU\UniXNU.efi from EFIESP, so this repository builds no
+# firmware volume and `unixnu build firmware` has nothing to do here. Mu-Silicium is not the
+# base either: it has no MSM8992 target and its delivery model is an Android boot image for
+# `fastboot boot`, which a Lumia does not have. See README.md, "The boot route".
 
-# TODO: [payload] and [payload.adt]. The ADT generator (make-lumia950-adt.py) has to emit the
-#       Apple node encoding with this SoC's addresses, a /chosen NVRAM proxy, the memory-map
-#       placeholders and the identity properties. The node spec for it is in README.md.
+# TODO: [payload] and [payload.adt], the driver's ramdisk payload for a boot image. The
+#       chainload tree in payload/ is a different thing: files on EFIESP, staged by
+#       scripts/build-payload.sh. When the kernel line opens, the two converge on the same
+#       \EFI\UniXNU\Payloads layout, and this section names what the ADT generator emits.
+#
+#       The ADT generator (make-lumia950-adt.py) has to emit the Apple node encoding with
+#       this SoC's addresses, a /chosen NVRAM proxy, the memory-map placeholders and the
+#       identity properties. The node spec for it is in README.md.
 #       dram_size must come from the firmware's memory map, not from the 3 GiB marketing
 #       figure: reserved regions carve into it.

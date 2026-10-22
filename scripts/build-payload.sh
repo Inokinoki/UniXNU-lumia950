@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Build the Lumia 950 chainload payload with EDK II and stage it in the EFIESP layout.
+#
+#   UNIXNU_SOURCE=/path/to/UniXNU UNIXNU_EDK2=/path/to/mu_basecore \
+#     bash scripts/build-payload.sh [OUT]
+#
+# OUT defaults to out/payload and holds what goes on the phone:
+#
+#   OUT/EFI/UniXNU/UniXNU.efi              the menu, started from the Lumia boot manager
+#   OUT/EFI/UniXNU/unixnu.toml             its configuration
+#   OUT/EFI/UniXNU/Drivers/DarwinBoot.efi  the loader, listed in the config only once a
+#                                          kernel exists
+#
+# Copy that tree over \EFI on EFIESP (or onto the microSD card). This does not touch the
+# Lumia's own UEFI: that firmware stays as Lumia950XLPkg built it, and only starts our
+# application, which is why nothing here can brick the phone.
+#
+# Requirements: an edk2 or Mu_Basecore checkout with BaseFdtLib and MipiSysTLib submodules,
+# clang and lld for CLANGPDB, and the UniXNU DarwinBoot submodule.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+UNIXNU=${UNIXNU_SOURCE:-$ROOT/../unixnu}
+EDK2=${UNIXNU_EDK2:-}
+OUT=${1:-$ROOT/out/payload}
+TARGET=${TARGET:-DEBUG}
+TOOLCHAIN=${TOOLCHAIN:-CLANGPDB}
+JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}
+PYTHON=${PYTHON:-python3}
+
+if [ -z "$EDK2" ] || [ ! -f "$EDK2/MdePkg/MdePkg.dec" ]; then
+  echo "error: set UNIXNU_EDK2 to an edk2 or Mu_Basecore checkout (MdePkg not found)" >&2
+  exit 1
+fi
+DARWINBOOT=$UNIXNU/drivers/DarwinBoot
+if [ ! -f "$DARWINBOOT/DarwinBootPkg/DarwinBoot.dsc" ]; then
+  echo "error: $DARWINBOOT is empty; in $UNIXNU run:" >&2
+  echo "  git submodule update --init --depth 1 drivers/DarwinBoot" >&2
+  exit 1
+fi
+
+echo "== UniXNU and UniXNUDxe"
+UNIXNU_EDK2=$EDK2 JOBS=$JOBS PYTHON_COMMAND=$PYTHON "$UNIXNU/package/build.sh" -b "$TARGET" -t "$TOOLCHAIN"
+
+echo "== DarwinBoot"
+# DarwinBootPkg has its own DSC, so it builds without a firmware volume to be part of. The
+# CONF files and BaseTools wrappers are what package/build.sh sets up for UniXNUPkg; the
+# toolchain rejects a build started without them.
+export WORKSPACE=$DARWINBOOT
+export PACKAGES_PATH=$WORKSPACE:$EDK2
+export EDK_TOOLS_PATH=$EDK2/BaseTools
+export CONF_PATH=$WORKSPACE/Build/Conf
+mkdir -p "$CONF_PATH"
+for f in target tools_def build_rule; do
+  if [ ! -f "$CONF_PATH/$f.txt" ] || [ "$EDK_TOOLS_PATH/Conf/$f.template" -nt "$CONF_PATH/$f.txt" ]; then
+    cp "$EDK_TOOLS_PATH/Conf/$f.template" "$CONF_PATH/$f.txt"
+  fi
+done
+if [ -z "${CLANG_BIN:-}" ]; then
+  CLANG=$(command -v clang) || { echo "error: clang not found" >&2; exit 1; }
+  CLANG_BIN=$(dirname "$CLANG")/
+fi
+export CLANG_BIN
+export PATH=$EDK_TOOLS_PATH/BinWrappers/PosixLike:$EDK_TOOLS_PATH/Source/C/bin:$PATH
+# -m builds only the loader: the DSC also lists the validation application, which is a test.
+build -p DarwinBootPkg/DarwinBoot.dsc -a AARCH64 -b "$TARGET" -t "$TOOLCHAIN" -n "$JOBS" \
+  -m DarwinBootPkg/Driver/DarwinBoot.inf
+
+echo "== stage"
+"$PYTHON" "$UNIXNU/package/Scripts/stage-esp.py" -o "$OUT" "$ROOT/payload" \
+  --put "$UNIXNU/package/Build/Out/AARCH64-$TARGET/UniXNU.efi=EFI/UniXNU/UniXNU.efi" \
+  --put "$WORKSPACE/build/DarwinBoot/${TARGET}_$TOOLCHAIN/AARCH64/DarwinBoot.efi=EFI/UniXNU/Drivers/DarwinBoot.efi"
+
+echo "== check"
+"$PYTHON" "$ROOT/scripts/check-payload.py" --config "$OUT/EFI/UniXNU/unixnu.toml" --payload-dir "$OUT"
+
+echo "== output"
+if command -v sha256sum >/dev/null 2>&1; then
+  find "$OUT" -type f -print0 | sort -z | xargs -0 sha256sum
+else
+  find "$OUT" -type f -print0 | sort -z | xargs -0 shasum -a 256
+fi
