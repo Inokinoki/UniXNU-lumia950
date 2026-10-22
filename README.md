@@ -29,11 +29,9 @@ structure, the register map with its sources, and the eMMC driver's host-testabl
 | Board and defconfig parse | `unixnu defconfig lumia950_defconfig -D lumia950` | accepted |
 | Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device` |
 | Incomplete-board guard | `unixnu build kernel --dry-run -D lumia950` | refused, as designed |
-| CI workflow file | YAML parse, `bash -n` on all 13 run blocks | clean |
+| CI workflow file | YAML parse, `bash -n` on all 12 run blocks | clean |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
 | XNU kernel link | same run | links with the board archives |
-| Prelink candidate | `kernel` job, [run 39863399942](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39863399942) | `kernel.macho`, 51,499,008 bytes, 12 components, 25,803 bindings |
-| Kernelcache pin | same run | decompressed cache is `f18b4df8…969de7`, matching `[kernel.prelink]` |
 
 The driver's *kernel* half (`NativeSdhci.cpp`) compiles against the recorded kernel ABI,
 and the archive holds `NativeSdhci.o` and `SdhciCore.o`, both ARM64 `MH_OBJECT`; the
@@ -46,34 +44,29 @@ is referenced even with the display provider unselected. `drivers/NativeLegacyDi
 defines both probe entry points and does nothing else — no framebuffer, no provider — and
 the defconfig force-loads it through the kernel script's `XNU_EXTRA_LD_ARCHIVES` hook.
 
-Prelink runs too. The two roots in `[kernel.prelink]` (the platform expert and apfs) pull
-in their declared dependencies, so the candidate carries 12 components, including the
-watchdog timer, effaceable storage, corecrypto, AppleImage4, CoreTrust and the storage and
-crypto families, with 25,803 bindings and 12 module entry points in the report beside
-`kernel.macho`.
+Prelink is paused, and the reason is a version line, not a defect. The port must be iOS 16,
+but the source pin is `xnu-10063.141.1` (Darwin 23.6.0, 17.x). The prelink merges the
+source kernel with the kexts of the IPSW kernelcache, and those kexts are built for one
+XNU: a 17.x kernel with the 16.7.16 kernelcache would call into components from another
+ABI. The 17.x candidate that used to be produced here (12 components) answered the tool,
+not the requirement.
 
-The candidate is experimental, and the tool says so itself: every report carries
-`runtime_qualified: false` and `loadable: false`, by construction. It is also not
-byte-reproducible — two runs over the same inputs produced different candidate hashes —
-so the run records its size and component count, not a hash identity. What is left is the
-payload, the firmware and the boot ladder, all of which need the phone.
+Moving the kernel to 16.x is measured, not guessed: of 56 XNU patches, 44 apply to
+`xnu-8796.141.3` (the 16.x tree) and 12 do not — among them the 4K pmap patch, whose
+target `osfmk/arm64/sptm/pmap/pmap.c` does not exist in 16.x, and NativePrelink's own
+patches are named for `xnu-10063.141.1`. Until that route is taken, `[kernel.prelink]`
+stays out and the kernel job stops at the prelink gate.
 
 ## The reference image
 
-`[ipsw]` pins iPadOS 17.7.11 (build 21H461) for iPad7,3, device class j207ap.
+`[ipsw]` pins iPhone X, iOS 16.7.16 (build 20H392), device class d221ap.
 
 | Question | Answer |
 | --- | --- |
-| Why 17.x and not 16.x | `feeds.toml` pins xnu-10063.141.1 (Darwin 23.6.0), the 17.x tree; an iOS 16 kernelcache carries components that source ABI is not qualified against |
-| Why iPad7,3 | this board's own identity in a restore shared by iPad7,1 through iPad7,4; all four identities name the same `kernelcache.release.ipad7` |
-| What prelink reads | the `KernelCache` member only, through HTTP range requests — the 6.4 GiB image is never downloaded whole |
-| What is pinned | the decompressed arm64 kernelcache, `kernelcache_sha256`; a different cache is refused before the merge |
-
-The pin is `f18b4df8…969de7`, the value the upstream device page publishes for this same
-restore, so it is the image's identity and not a local artefact. `[ipsw.sha256]` member pins
-are deliberately absent: prelink reads the member through the zip rather than extracting
-it, so no member file exists to check, and the decompressed pin covers the bytes that are
-actually merged.
+| Why this release | iOS 16 is the requirement, and 16.7.16 is the last 16.x release and the one the community ports reached userland with |
+| Why iPhone10,6 | the phone-shaped identity in a restore that serves iPhone10,3 and iPhone10,6; both use `kernelcache.release.iphone10b` |
+| How it was checked | product, version, build, device class, chip `0x8015` and board `0x0e` were read from the image's own `BuildManifest.plist` over HTTP range requests |
+| What is not pinned | the kernelcache hash, because nothing consumes the cache until a 16.x kernel route exists; `[kernel.prelink]` returns with that hash |
 
 ## Layout
 
@@ -229,12 +222,12 @@ solves this with a macOS GitHub Actions runner, so this repository carries
 | Job | Runner | Trigger | What it does |
 | --- | --- | --- | --- |
 | `validate` | `ubuntu-latest` | every push and pull request | parses `board.toml` and the defconfig, compiles and runs the core test, checks that the build driver accepts the board, and that the `example` guard still refuses to build |
-| `kernel` | `macos-latest` | manual (`workflow_dispatch`) | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, links, and prelinks against the IPSW kernelcache |
+| `kernel` | `macos-latest` | manual (`workflow_dispatch`) | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, and links |
 
-The `kernel` job requires the whole chain. It fails if `libNativeSdhci.a` or
-`kernel.macho` is missing, and nothing is tolerated: the compile, the link and the prelink
-all have to succeed. The run also prints the kernelcache and candidate hashes, which is
-where the pins in `board.toml` came from.
+The `kernel` job compiles and links, then stops at the prelink gate because the board has no
+`[kernel.prelink]` while the source pin is 17.x. That one stop is tolerated and every other
+failure fails the job, so the archive and the link stay verified. When a 16.x kernel route
+lands, the prelink section and its pin return and the gate goes away.
 
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.

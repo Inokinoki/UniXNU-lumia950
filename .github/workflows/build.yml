@@ -56,14 +56,13 @@ jobs:
           assert pathlib.Path("drivers/NativeLegacyDisplay/NativeLegacyDisplay.cpp").is_file()
           ipsw = board["ipsw"]
           assert ipsw["url"].startswith("https://updates.cdn-apple.com/"), ipsw["url"]
+          assert ipsw["version"].startswith("16."), ipsw  # the port stays on 16.x
           assert ipsw["version"] in ipsw["url"] and ipsw["build"] in ipsw["url"], ipsw
-          assert ipsw["product"] and ipsw["device_class"], ipsw
-          assert isinstance(ipsw["chip_id"], int) and isinstance(ipsw["board_id"], int), ipsw
-          prelink = board["kernel"]["prelink"]
-          assert prelink["tool"].endswith("NativePrelink/emit_prelink.py"), prelink
-          assert prelink["kernel"].endswith("mach.development.bcm2837.unstripped.noctf"), prelink
-          assert prelink["slide"].startswith("-0x") and int(prelink["slide"], 16) < 0, prelink
-          assert prelink["roots"], prelink
+          assert ipsw["product"] == "iPhone10,6" and ipsw["device_class"] == "d221ap", ipsw
+          assert ipsw["chip_id"] == 0x8015 and ipsw["board_id"] == 14, ipsw
+          # Prelink is deliberately absent while the source pin is 17.x: merging that
+          # kernel with a 16.x kernelcache would join components from another ABI.
+          assert "prelink" not in board["kernel"], board["kernel"]
           print("board.toml and defconfig: ok")
           PY
 
@@ -155,28 +154,36 @@ jobs:
           python3 unixnu fetch xnu libplatform libdispatch AvailabilityVersions \
               libpthread corecrypto-2023 IOStorageFamily -D "$RUNNER_TEMP/device"
 
-      - name: Build the kernel, the device archives and the prelink candidate
-        # The whole chain must now succeed: compile XNU, build the board archives, link,
-        # then merge the source kernel with the kernelcache of board.toml [ipsw]. The
-        # IPSW is read with HTTP range requests, so only the kernelcache member crosses
-        # the network. There is no tolerated stop left for this board.
+      - name: Build the kernel and the device archives
+        # The board targets iOS 16 but the source pin is the 17.x tree, so there is no
+        # [kernel.prelink]: merging a 17.x kernel with the 16.7.16 kernelcache would join
+        # components built for a different XNU. The kernel step therefore compiles, builds
+        # the archives and links, then stops at the prelink gate. That one stop is
+        # tolerated; every other failure fails the job.
         run: |
-          set -o pipefail
+          set +e
           cd unixnu
           python3 unixnu build kernel -D "$RUNNER_TEMP/device" 2>&1 | tee "$GITHUB_WORKSPACE/kernel.log"
+          status=${PIPESTATUS[0]}
+          set -e
 
           archive=$(find "$UNIXNU_OUT" -name 'libNativeSdhci.a' -print -quit || true)
           if [ -z "$archive" ]; then
             echo "::error::NativeSdhci was not compiled; the build stopped before the archives"
             exit 1
           fi
-          prelink=$(find "$UNIXNU_OUT" -path '*/kernel/kernel.macho' -print -quit || true)
-          if [ -z "$prelink" ]; then
-            echo "::error::prelink produced no kernel.macho"
-            exit 1
-          fi
           echo "archive: $archive"
-          echo "prelink: $prelink"
+
+          if [ "$status" -eq 0 ]; then
+            echo "kernel step succeeded without a prelink section; that is unexpected but not a failure"
+            exit 0
+          fi
+          if grep -q "kernel.prelink" "$GITHUB_WORKSPACE/kernel.log"; then
+            echo "kernel step stopped at the prelink gate, as expected while the 16.x kernel route is open"
+            exit 0
+          fi
+          echo "::error::the kernel step failed for a reason other than the prelink gate"
+          exit 1
 
       - name: Record what the driver compiled against
         run: |
@@ -184,20 +191,7 @@ jobs:
             -exec shasum -a 256 {} \;
           grep -h "NativeSdhci\|NativeLegacyDisplay\|archive" "$UNIXNU_OUT"/*/logs/archive-*.log | tail -20 || true
 
-      - name: Record the prelink inputs and output
-        # The kernelcache hash is what [kernel.prelink] kernelcache_sha256 pins, and the
-        # prelink hash identifies the candidate this run produced.
-        run: |
-          # The IPSW cache lives at out/ipsw/<build>/, beside the board's own directory.
-          shasum -a 256 "$UNIXNU_OUT"/ipsw/*/kernelcache.decompressed
-          shasum -a 256 "$UNIXNU_OUT"/*/kernel/kernel.macho
-          python3 - "$UNIXNU_OUT" <<'PY'
-          import json, pathlib, sys
-          for report in pathlib.Path(sys.argv[1]).glob('*/kernel/kernel.json'):
-              data = json.loads(report.read_text())
-              print(report, 'components:', len(data.get('components', [])))
-              print('  roots:', ', '.join(data.get('components', [])[:8]))
-          PY
+
 
       - uses: actions/upload-artifact@v4
         with:
@@ -205,7 +199,6 @@ jobs:
           path: |
             out/*/tree/build/native-sdhci/**
             out/*/tree/build/native-legacy-display/**
-            out/*/kernel/**
             out/*/logs/**
             kernel.log
           if-no-files-found: error
