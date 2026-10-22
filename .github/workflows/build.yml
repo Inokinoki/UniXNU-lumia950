@@ -118,12 +118,31 @@ jobs:
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
 
+      - name: Prepare the build copy
+        # The committed board keeps example = true so nothing pretends this port is
+        # complete. CI builds from a scratch copy with the guard cleared, and only for
+        # the duration of the run. If the build ever needs an edit here, that is a sign
+        # the board is missing something real.
+        run: |
+          mkdir -p "$RUNNER_TEMP/device"
+          rsync -a --exclude .git --exclude build --exclude out ./ "$RUNNER_TEMP/device/"
+          python3 - "$RUNNER_TEMP/device/board.toml" <<'PY'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          assert text.count("example = true") == 1, "guard line is not unique"
+          text = text.replace("example = true", "# example guard cleared in the CI scratch copy", 1)
+          path.write_text(text)
+          assert "example = true" not in path.read_text()
+          print("scratch board: example guard cleared")
+          PY
+
       - name: Select the device and fetch the Apple references
         run: |
           cd unixnu
-          python3 unixnu defconfig lumia950_defconfig -D "$GITHUB_WORKSPACE"
+          python3 unixnu defconfig lumia950_defconfig -D "$RUNNER_TEMP/device"
           python3 unixnu fetch xnu libplatform libdispatch AvailabilityVersions \
-              libpthread corecrypto-2023 IOStorageFamily -D "$GITHUB_WORKSPACE"
+              libpthread corecrypto-2023 IOStorageFamily -D "$RUNNER_TEMP/device"
 
       - name: Build the kernel and the device archives
         # The board has no [kernel.prelink] section yet: that needs the target IPSW
@@ -134,7 +153,7 @@ jobs:
         run: |
           cd unixnu
           set +e
-          python3 unixnu build kernel -D "$GITHUB_WORKSPACE" 2>&1 | tee "$GITHUB_WORKSPACE/kernel.log"
+          python3 unixnu build kernel -D "$RUNNER_TEMP/device" 2>&1 | tee "$GITHUB_WORKSPACE/kernel.log"
           status=${PIPESTATUS[0]}
           set -e
 
