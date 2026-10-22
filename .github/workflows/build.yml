@@ -92,6 +92,12 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 360
+    env:
+      # prepare-xnu-source.py asks api.github.com for directory listings, and anonymous
+      # calls are rate limited per IP; shared runner IPs are usually over the limit.
+      # ci-tools/sitecustomize.py adds this token to api.github.com requests only.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PYTHONPATH: ${{ github.workspace }}/ci-tools
     steps:
       - uses: actions/checkout@v4
 
