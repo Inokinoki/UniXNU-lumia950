@@ -30,14 +30,20 @@ structure, the register map with its sources, and the eMMC driver's host-testabl
 | Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device` |
 | Incomplete-board guard | `unixnu build kernel --dry-run -D lumia950` | refused, as designed |
 | CI workflow file | YAML parse, `bash -n` on all 12 run blocks | clean |
-| Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39856939504](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39856939504) | compiled clean under `-Werror`; `libNativeSdhci.a` sha256 `2510a90c…ea2c84` |
+| Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
+| XNU kernel link | same run | links with the board archives; stops at the prelink gate |
 
 The driver's *kernel* half (`NativeSdhci.cpp`) compiles against the recorded kernel ABI,
-and the archive holds two ARM64 `MH_OBJECT` members: `NativeSdhci.o` and `SdhciCore.o`.
-The XNU link in that same run stops on `_native_legacy_display_probe`, which is outside the
-driver: upstream calls it from `bsd_init.c` with no `#if`, and this board has no display
-provider. `libNativeSdhci.a` is the milestone; the kernel's final link stays red until the
-board gains a display driver.
+and the archive holds `NativeSdhci.o` and `SdhciCore.o`, both ARM64 `MH_OBJECT`; the
+archive is not byte-reproducible, because `ar` records member timestamps, so it is not
+quoted as an identity.
+
+The kernel links too. Upstream calls `native_legacy_display_probe()` from `bsd_init.c`
+without the `XNU_NATIVE_LEGACY_DISPLAY` guard every other call site carries, so the symbol
+is referenced even with the display provider unselected. `drivers/NativeLegacyDisplay`
+defines both probe entry points and does nothing else — no framebuffer, no provider — and
+the defconfig force-loads it through the kernel script's `XNU_EXTRA_LD_ARCHIVES` hook.
+What remains is prelink: it needs the target IPSW and its original kernelcache.
 
 ## Layout
 
@@ -45,6 +51,7 @@ board gains a display driver.
 lumia950/
   board.toml                        board description, incomplete by design
   configs/lumia950_defconfig        kernel configuration
+  drivers/NativeLegacyDisplay/      probe-symbol archive; not a driver, and not a display
   drivers/NativeSdhci/              the eMMC driver
     BoardConstants.h                Lumia 950 addresses, each with its source
     SdhciRegs.h                     SDHCI register map (spec layout, not guessed)
@@ -195,18 +202,10 @@ solves this with a macOS GitHub Actions runner, so this repository carries
 | `kernel` | `macos-latest` | manual (`workflow_dispatch`) | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, and compiles `NativeSdhci` against the compile records that pass leaves behind |
 
 The `kernel` job exists to compile the driver — the artifact is `libNativeSdhci.a`, and
-the run fails if it is missing. The kernel step can also stop on two known gaps of the
-board, neither of them in the driver:
-
-| Gap | Why |
-| --- | --- |
-| prelink gate | this board has no `[kernel.prelink]`, because the target IPSW and its original kernelcache are not chosen |
-| final link | upstream's `offline-component-load-probes.patch` calls `native_legacy_display_probe()` from `bsd_init.c` without a `#if`, so a board with no display provider leaves it undefined |
-
-The workflow tolerates **exactly** those two outcomes and fails on anything else: a
-missing or extra undefined symbol, a compile error, or a failure that matches neither
-case. Both tolerances come out once the prelink section exists and the board has a display
-provider.
+the run fails if it is missing. The XNU build and link must both succeed; the one tolerated
+stop is the prelink gate, because this board has no `[kernel.prelink]` until the target
+IPSW and its original kernelcache are chosen. Any other failure fails the job, and the
+tolerance comes out once that section exists.
 
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.
