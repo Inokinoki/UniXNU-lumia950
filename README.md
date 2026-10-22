@@ -32,7 +32,7 @@ structure, the register map with its sources, and the eMMC driver's host-testabl
 | CI workflow file | YAML parse, `bash -n` on all 13 run blocks | clean |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
 | XNU kernel link | same run | links with the board archives |
-| Prelink candidate | `kernel` job, [run 39862393365](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39862393365) | `kernel.macho` merged from 12 components, sha256 `b51af22f…651c4` |
+| Prelink candidate | `kernel` job, [run 39863399942](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39863399942) | `kernel.macho`, 51,499,008 bytes, 12 components, 25,803 bindings |
 | Kernelcache pin | same run | decompressed cache is `f18b4df8…969de7`, matching `[kernel.prelink]` |
 
 The driver's *kernel* half (`NativeSdhci.cpp`) compiles against the recorded kernel ABI,
@@ -47,8 +47,15 @@ defines both probe entry points and does nothing else — no framebuffer, no pro
 the defconfig force-loads it through the kernel script's `XNU_EXTRA_LD_ARCHIVES` hook.
 
 Prelink runs too. The two roots in `[kernel.prelink]` (the platform expert and apfs) pull
-in their declared dependencies, so the candidate carries 12 components; the report beside
-`kernel.macho` records the bindings and the module entry points. What is left is the
+in their declared dependencies, so the candidate carries 12 components, including the
+watchdog timer, effaceable storage, corecrypto, AppleImage4, CoreTrust and the storage and
+crypto families, with 25,803 bindings and 12 module entry points in the report beside
+`kernel.macho`.
+
+The candidate is experimental, and the tool says so itself: every report carries
+`runtime_qualified: false` and `loadable: false`, by construction. It is also not
+byte-reproducible — two runs over the same inputs produced different candidate hashes —
+so the run records its size and component count, not a hash identity. What is left is the
 payload, the firmware and the boot ladder, all of which need the phone.
 
 ## The reference image
@@ -61,6 +68,12 @@ payload, the firmware and the boot ladder, all of which need the phone.
 | Why iPad7,3 | this board's own identity in a restore shared by iPad7,1 through iPad7,4; all four identities name the same `kernelcache.release.ipad7` |
 | What prelink reads | the `KernelCache` member only, through HTTP range requests — the 6.4 GiB image is never downloaded whole |
 | What is pinned | the decompressed arm64 kernelcache, `kernelcache_sha256`; a different cache is refused before the merge |
+
+The pin is `f18b4df8…969de7`, the value the upstream device page publishes for this same
+restore, so it is the image's identity and not a local artefact. `[ipsw.sha256]` member pins
+are deliberately absent: prelink reads the member through the zip rather than extracting
+it, so no member file exists to check, and the decompressed pin covers the bytes that are
+actually merged.
 
 ## Layout
 
