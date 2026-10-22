@@ -188,7 +188,8 @@ jobs:
         # The kernelcache hash is what [kernel.prelink] kernelcache_sha256 pins, and the
         # prelink hash identifies the candidate this run produced.
         run: |
-          shasum -a 256 "$UNIXNU_OUT"/*/ipsw/*/kernelcache.decompressed
+          # The IPSW cache lives at out/ipsw/<build>/, beside the board's own directory.
+          shasum -a 256 "$UNIXNU_OUT"/ipsw/*/kernelcache.decompressed
           shasum -a 256 "$UNIXNU_OUT"/*/kernel/kernel.macho
           python3 - "$UNIXNU_OUT" <<'PY'
           import json, pathlib, sys
