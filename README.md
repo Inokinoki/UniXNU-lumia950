@@ -39,16 +39,45 @@ UniXNU's menu reads `ConIn`; touch arrives as an absolute pointer, which the men
 consume. The Lumia's buttons reach it only if the firmware publishes them as a text input
 device.
 
-### Deploying it
+### Testing it on the phone
 
-Unlocking the bootloader and mounting EFIESP in Mass Storage Mode are prerequisites and are
-not in this repository. That is the one step in the whole plan that can brick the phone.
+Nothing in the Lumia firmware runs an application from `\EFI\UniXNU` by name. It boots the
+first `\EFI\BOOT\BOOTAA64.EFI` it can load from any FAT volume it has mounted
+(`Application/BootSplashApp/SplashApp.c`, `DiscoverAndBootApp`), and falls back to its own
+boot manager menu only when that fails. That removable-media name is the entry point, so the
+payload is staged with the menu under both names:
 
-1. Unlock with WPInternals and mount EFIESP in Mass Storage Mode.
-2. Copy `out/payload/EFI/UniXNU` to `\EFI\UniXNU` on EFIESP, or onto the microSD card.
-3. Add an entry for `\EFI\UniXNU\UniXNU.efi` to the Lumia950XLPkg boot menu.
-4. Boot it: the menu should appear for 20 s and then hand control back to the firmware.
-5. To revert, delete the directory. No firmware image is modified.
+| On EFIESP | From the artifact |
+| --- | --- |
+| `\EFI\BOOT\BOOTAA64.EFI` | `EFI/BOOT/BOOTAA64.EFI` — the same `UniXNU.efi` |
+| `\EFI\UniXNU\unixnu.toml` | `EFI/UniXNU/unixnu.toml` |
+| `\EFI\UniXNU\Drivers\DarwinBoot.efi` | not loaded until a kernel entry exists |
+
+Unlocking with WPInternals and installing the Lumia950XLPkg UEFI (`UEFI.elf` in the EFIESP
+root, the Boot Shim application, a BCD entry for it) come first and are not in this
+repository. That is the one step in the whole plan that can brick the phone.
+
+1. Mount EFIESP in Mass Storage Mode and back up `\EFI\BOOT`. Windows Phone's own loader is
+   ARM32 (`BOOTARM.EFI`), so `BOOTAA64.EFI` is usually free — but if one is already there it
+   is somebody else's fallback loader, so rename it rather than overwriting it.
+2. Copy `out/payload/EFI` over `\EFI`. Nothing else on the partition changes.
+3. Reboot and leave the splash alone. Expect the UniXNU menu for 20 s; "Exit to firmware"
+   then opens the firmware's own menu, the one with System Info.
+4. To go back to Windows, mount EFIESP again and delete `\EFI\BOOT\BOOTAA64.EFI`. While it
+   is there, that file is what the firmware starts.
+
+What each outcome means:
+
+| What happens | Likely cause |
+| --- | --- |
+| no menu, the firmware menu appears after a few seconds | the image did not load: check the copy is 95232 bytes and AArch64 |
+| text console instead of cards | GOP is present but the graphics path is not; see `[ui] console` |
+| menu draws, buttons do nothing | no key reaches `ConIn`; the 20 s timer still exits to the firmware |
+| menu draws, `Restart` or `Power off` does nothing | the firmware's `ResetSystem` for that action is a stub |
+
+The firmware registers a `UEFI Shell` boot option from a file GUID in its volume and maps it
+to Volume Up (`Library/PlatformBootManagerLib/PlatformBm.c`). The release build has no Shell
+in that volume, so the volume buttons are only a menu input, not a way into a shell.
 
 ## State
 

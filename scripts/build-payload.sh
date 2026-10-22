@@ -70,8 +70,13 @@ build -p DarwinBootPkg/DarwinBoot.dsc -a AARCH64 -b "$TARGET" -t "$TOOLCHAIN" -n
   -m DarwinBootPkg/Driver/DarwinBoot.inf
 
 echo "== stage"
+# The menu goes in twice on purpose. UniXNU reads its config from \EFI\UniXNU, but nothing in
+# the Lumia firmware runs an application from there by name: BootSplashApp boots the first
+# \EFI\BOOT\BOOTAA64.EFI it can load from any volume it has mounted and only falls back to
+# the boot manager menu when that fails, so the removable-media name is the entry point.
 "$PYTHON" "$UNIXNU/package/Scripts/stage-esp.py" -o "$OUT" "$ROOT/payload" \
   --put "$UNIXNU/package/Build/Out/AARCH64-$TARGET/UniXNU.efi=EFI/UniXNU/UniXNU.efi" \
+  --put "$UNIXNU/package/Build/Out/AARCH64-$TARGET/UniXNU.efi=EFI/BOOT/BOOTAA64.EFI" \
   --put "$WORKSPACE/build/DarwinBoot/${TARGET}_$TOOLCHAIN/AARCH64/DarwinBoot.efi=EFI/UniXNU/Drivers/DarwinBoot.efi"
 
 echo "== check"
