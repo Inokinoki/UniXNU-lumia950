@@ -33,8 +33,6 @@ archives = [
   "build-arm-driver.py NativeLegacyDisplay",
   # "build-arm-driver.py NativeRamBlock",   # Data volume; also needs the virtio bindings builder
 ]
-# TODO: pin the extracted kernelcache and its decompressed Mach-O (sha256) once the first
-#       prelink run has produced them.
 # TODO: obtain the real userdata GPT geometry (first_lba, last_lba) read-only from the phone.
 
 # The Apple reference image. It supplies the original kernelcache that prelink merges with
@@ -61,6 +59,9 @@ fetch = ["KernelCache"]
 [kernel.prelink]
 tool = "kits/NativePrelink/emit_prelink.py"
 kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
+# The decompressed arm64 kernelcache of the image above (kernelcache.release.ipad7, shared by
+# iPad7,1 through iPad7,4). A different cache is refused before the merge.
+kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
 # The native kernel slot is built for ARM64_PLKSEG_ADDR 0xfffffff004004000; the slide moves
 # the original coalesced segments onto it.
 slide = "-0x1000000"

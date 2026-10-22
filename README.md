@@ -29,9 +29,11 @@ structure, the register map with its sources, and the eMMC driver's host-testabl
 | Board and defconfig parse | `unixnu defconfig lumia950_defconfig -D lumia950` | accepted |
 | Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device` |
 | Incomplete-board guard | `unixnu build kernel --dry-run -D lumia950` | refused, as designed |
-| CI workflow file | YAML parse, `bash -n` on all 12 run blocks | clean |
+| CI workflow file | YAML parse, `bash -n` on all 13 run blocks | clean |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
-| XNU kernel link | same run | links with the board archives; stops at the prelink gate |
+| XNU kernel link | same run | links with the board archives |
+| Prelink candidate | `kernel` job, [run 39862393365](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39862393365) | `kernel.macho` merged from 12 components, sha256 `b51af22f…651c4` |
+| Kernelcache pin | same run | decompressed cache is `f18b4df8…969de7`, matching `[kernel.prelink]` |
 
 The driver's *kernel* half (`NativeSdhci.cpp`) compiles against the recorded kernel ABI,
 and the archive holds `NativeSdhci.o` and `SdhciCore.o`, both ARM64 `MH_OBJECT`; the
@@ -43,7 +45,22 @@ without the `XNU_NATIVE_LEGACY_DISPLAY` guard every other call site carries, so 
 is referenced even with the display provider unselected. `drivers/NativeLegacyDisplay`
 defines both probe entry points and does nothing else — no framebuffer, no provider — and
 the defconfig force-loads it through the kernel script's `XNU_EXTRA_LD_ARCHIVES` hook.
-What remains is prelink: it needs the target IPSW and its original kernelcache.
+
+Prelink runs too. The two roots in `[kernel.prelink]` (the platform expert and apfs) pull
+in their declared dependencies, so the candidate carries 12 components; the report beside
+`kernel.macho` records the bindings and the module entry points. What is left is the
+payload, the firmware and the boot ladder, all of which need the phone.
+
+## The reference image
+
+`[ipsw]` pins iPadOS 17.7.11 (build 21H461) for iPad7,3, device class j207ap.
+
+| Question | Answer |
+| --- | --- |
+| Why 17.x and not 16.x | `feeds.toml` pins xnu-10063.141.1 (Darwin 23.6.0), the 17.x tree; an iOS 16 kernelcache carries components that source ABI is not qualified against |
+| Why iPad7,3 | this board's own identity in a restore shared by iPad7,1 through iPad7,4; all four identities name the same `kernelcache.release.ipad7` |
+| What prelink reads | the `KernelCache` member only, through HTTP range requests — the 6.4 GiB image is never downloaded whole |
+| What is pinned | the decompressed arm64 kernelcache, `kernelcache_sha256`; a different cache is refused before the merge |
 
 ## Layout
 
@@ -199,13 +216,12 @@ solves this with a macOS GitHub Actions runner, so this repository carries
 | Job | Runner | Trigger | What it does |
 | --- | --- | --- | --- |
 | `validate` | `ubuntu-latest` | every push and pull request | parses `board.toml` and the defconfig, compiles and runs the core test, checks that the build driver accepts the board, and that the `example` guard still refuses to build |
-| `kernel` | `macos-latest` | manual (`workflow_dispatch`) | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, and compiles `NativeSdhci` against the compile records that pass leaves behind |
+| `kernel` | `macos-latest` | manual (`workflow_dispatch`) | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, links, and prelinks against the IPSW kernelcache |
 
-The `kernel` job exists to compile the driver — the artifact is `libNativeSdhci.a`, and
-the run fails if it is missing. The XNU build and link must both succeed; the one tolerated
-stop is the prelink gate, because this board has no `[kernel.prelink]` until the target
-IPSW and its original kernelcache are chosen. Any other failure fails the job, and the
-tolerance comes out once that section exists.
+The `kernel` job requires the whole chain. It fails if `libNativeSdhci.a` or
+`kernel.macho` is missing, and nothing is tolerated: the compile, the link and the prelink
+all have to succeed. The run also prints the kernelcache and candidate hashes, which is
+where the pins in `board.toml` came from.
 
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.
