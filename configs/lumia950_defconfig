@@ -9,6 +9,10 @@ CONFIG_XNU_ARM_DT_PLATFORM=y
 CONFIG_XNU_ARMCPU=y
 CONFIG_XNU_NATIVE_SDHCI=y
 
+# ArmCpu is only accepted with the real source crypto provider, and the kernel
+# link expects the namespaced corecrypto archive that the builders above make.
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
+
 # Run the archive builders of [kernel] archives. NativeSdhci is compiled by
 # scripts/build-arm-driver.py against the compile records of the XNU pass.
 CONFIG_XNU_BUILD_ARCHIVES=y

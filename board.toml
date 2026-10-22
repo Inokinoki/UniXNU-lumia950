@@ -15,14 +15,18 @@ example = true
 
 [kernel]
 defconfig = "lumia950_defconfig"
-# Archive builders of the kernel step, in order. ArmDTPlatform is the platform expert that
-# consumes the ADT; ArmCpu owns the CPU, timer and interrupt path; NativeSdhci is this
-# device's eMMC driver (see drivers/NativeSdhci and README.md).
+# Archive builders of the kernel step, in order. Names are files of the build tree's
+# scripts/ directory, so they carry no path. The corecrypto pair comes first because
+# ArmCpu is only accepted with the real source crypto provider; ArmDTPlatform is the
+# platform expert that consumes the ADT; ArmCpu owns the CPU, timer and interrupt path;
+# NativeSdhci is this device's eMMC driver (see drivers/NativeSdhci and README.md).
 archives = [
-  "scripts/build-arm-driver.py ArmDTPlatform",
-  "scripts/build-arm-driver.py ArmCpu",
-  "scripts/build-arm-driver.py NativeSdhci",
-  # "scripts/build-arm-driver.py NativeRamBlock",   # Data volume; also needs the virtio bindings builder
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "build-arm-driver.py ArmDTPlatform",
+  "build-arm-driver.py ArmCpu",
+  "build-arm-driver.py NativeSdhci",
+  # "build-arm-driver.py NativeRamBlock",   # Data volume; also needs the virtio bindings builder
 ]
 # TODO: qualify the prelink policy and the original kernelcache hash for the chosen IPSW.
 # TODO: choose the IPSW identity independently; do not inherit sheng's identifiers. The
