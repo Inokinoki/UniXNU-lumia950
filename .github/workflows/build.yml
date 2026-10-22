@@ -142,11 +142,18 @@ jobs:
               libpthread corecrypto-2023 IOStorageFamily -D "$RUNNER_TEMP/device"
 
       - name: Build the kernel and the device archives
-        # The board has no [kernel.prelink] section yet: that needs the target IPSW
-        # identity and its original kernelcache. `unixnu build kernel` compiles XNU,
-        # runs the archive builders and links, then stops at prelink. The archive is
-        # the artifact this job exists to produce, so the run tolerates exactly that
-        # one failure and nothing else.
+        # The artifact this job exists to produce is libNativeSdhci.a, compiled
+        # against the real kernel ABI. The kernel step can also stop on two known
+        # gaps of the board, neither of which involves the driver:
+        #
+        #   * the prelink gate, because [kernel.prelink] needs the target IPSW and
+        #     its original kernelcache, and neither is chosen yet;
+        #   * the final link, because upstream's offline-component-load-probes.patch
+        #     calls native_legacy_display_probe() from bsd_init.c without a #if, and
+        #     this board has no display provider to define it.
+        #
+        # The run tolerates exactly those two outcomes. Any other failure, or any
+        # undefined symbol outside the display-provider set, fails the job.
         run: |
           cd unixnu
           set +e
@@ -161,14 +168,33 @@ jobs:
           fi
           echo "archive: $archive"
 
-          if [ "$status" -ne 0 ]; then
-            if grep -q "kernel.prelink" "$GITHUB_WORKSPACE/kernel.log"; then
-              echo "kernel step stopped at the prelink gate, as expected for this board"
-            else
-              echo "::error::the kernel step failed for a reason other than prelink"
-              exit 1
-            fi
+          if [ "$status" -eq 0 ]; then
+            echo "kernel step succeeded"
+            exit 0
           fi
+
+          if grep -q "kernel.prelink" "$GITHUB_WORKSPACE/kernel.log"; then
+            echo "kernel step stopped at the prelink gate, as expected for this board"
+            exit 0
+          fi
+
+          # Every undefined symbol, not only the expected one, so an unrelated link
+          # error cannot hide behind the display-provider tolerance.
+          undefined=$(grep -oE '^[[:space:]]+"[^"]+", referenced from:' "$GITHUB_WORKSPACE/kernel.log" \
+            | sed -E 's/^[[:space:]]+"([^"]+)",.*/\1/' | sort -u)
+          allowed="_native_legacy_display_probe _native_mobile_display_provider_probe"
+          bad=0
+          for symbol in $undefined; do
+            case " $allowed " in
+              *" $symbol "*) ;;
+              *) echo "::error::undefined symbol $symbol"; bad=1 ;;
+            esac
+          done
+          if [ "$bad" -ne 0 ] || [ -z "$undefined" ]; then
+            echo "::error::the kernel step failed for an unexpected reason"
+            exit 1
+          fi
+          echo "kernel link stops on the display-provider gap: $undefined"
 
       - name: Record what the driver compiled against
         run: |

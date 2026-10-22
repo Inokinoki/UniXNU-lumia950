@@ -64,7 +64,7 @@ uint16_t NativeSdhci::readHc16(uint32_t offset) const
 {
     if (!hc) return 0;
     uint16_t value = 0;
-    memcpy(&value, const_cast<volatile uint8_t *>(hc) + offset, sizeof value);
+    memcpy(&value, const_cast<uint8_t *>(hc) + offset, sizeof value);
     return value;
 }
 
@@ -72,7 +72,7 @@ uint32_t NativeSdhci::readHc32(uint32_t offset) const
 {
     if (!hc) return 0;
     uint32_t value = 0;
-    memcpy(&value, const_cast<volatile uint8_t *>(hc) + offset, sizeof value);
+    memcpy(&value, const_cast<uint8_t *>(hc) + offset, sizeof value);
     return value;
 }
 
@@ -83,19 +83,19 @@ void NativeSdhci::writeHc8(uint32_t offset, uint8_t value)
 
 void NativeSdhci::writeHc16(uint32_t offset, uint16_t value)
 {
-    if (hc) memcpy(const_cast<volatile uint8_t *>(hc) + offset, &value, sizeof value);
+    if (hc) memcpy(const_cast<uint8_t *>(hc) + offset, &value, sizeof value);
 }
 
 void NativeSdhci::writeHc32(uint32_t offset, uint32_t value)
 {
-    if (hc) memcpy(const_cast<volatile uint8_t *>(hc) + offset, &value, sizeof value);
+    if (hc) memcpy(const_cast<uint8_t *>(hc) + offset, &value, sizeof value);
 }
 
 uint32_t NativeSdhci::readCore32(uint32_t offset) const
 {
     if (!core) return 0;
     uint32_t value = 0;
-    memcpy(&value, const_cast<volatile uint8_t *>(core) + offset, sizeof value);
+    memcpy(&value, const_cast<uint8_t *>(core) + offset, sizeof value);
     return value;
 }
 
@@ -399,8 +399,8 @@ bool NativeSdhci::start(IOService *provider)
     if (!mapWindows(provider)) return false;
 
     IOLog("NativeSdhci: hc at %p (virtual), core at %p\n",
-          reinterpret_cast<void *>(const_cast<volatile uint8_t *>(hc)),
-          reinterpret_cast<void *>(const_cast<volatile uint8_t *>(core)));
+          reinterpret_cast<void *>(const_cast<uint8_t *>(hc)),
+          reinterpret_cast<void *>(const_cast<uint8_t *>(core)));
 
     logHost();
     resetCommandLine();

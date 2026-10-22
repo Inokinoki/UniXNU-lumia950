@@ -191,10 +191,18 @@ solves this with a macOS GitHub Actions runner, so this repository carries
 | `kernel` | `macos-latest` | manual (`workflow_dispatch`) | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, and compiles `NativeSdhci` against the compile records that pass leaves behind |
 
 The `kernel` job exists to compile the driver — the artifact is `libNativeSdhci.a`, and
-the run fails if it is missing. `unixnu build kernel` also prelinks, and this board has no
-`[kernel.prelink]` yet because the target IPSW and its original kernelcache are not chosen.
-The workflow therefore tolerates **exactly** that failure, checking the log for the prelink
-gate, and fails on anything else. Once the prelink section exists, drop that tolerance.
+the run fails if it is missing. The kernel step can also stop on two known gaps of the
+board, neither of them in the driver:
+
+| Gap | Why |
+| --- | --- |
+| prelink gate | this board has no `[kernel.prelink]`, because the target IPSW and its original kernelcache are not chosen |
+| final link | upstream's `offline-component-load-probes.patch` calls `native_legacy_display_probe()` from `bsd_init.c` without a `#if`, so a board with no display provider leaves it undefined |
+
+The workflow tolerates **exactly** those two outcomes and fails on anything else: a
+missing or extra undefined symbol, a compile error, or a failure that matches neither
+case. Both tolerances come out once the prelink section exists and the board has a display
+provider.
 
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.
