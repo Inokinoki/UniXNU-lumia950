@@ -46,8 +46,11 @@ echo "== DarwinBoot"
 # DarwinBootPkg has its own DSC, so it builds without a firmware volume to be part of. The
 # CONF files and BaseTools wrappers are what package/build.sh sets up for UniXNUPkg; the
 # toolchain rejects a build started without them.
+# DarwinBoot declares UniXNUPkg for the loader protocol GUID, so the package tree joins the
+# packages path as well; without it the build stops at DarwinBoot.inf with
+# "UniXNUPkg/UniXNUPkg.dec is not found in packages path".
 export WORKSPACE=$DARWINBOOT
-export PACKAGES_PATH=$WORKSPACE:$EDK2
+export PACKAGES_PATH=$WORKSPACE:$UNIXNU/package:$EDK2
 export EDK_TOOLS_PATH=$EDK2/BaseTools
 export CONF_PATH=$WORKSPACE/Build/Conf
 mkdir -p "$CONF_PATH"
