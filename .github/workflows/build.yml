@@ -54,6 +54,16 @@ jobs:
           archives = board["kernel"]["archives"]
           assert "build-arm-driver.py NativeLegacyDisplay" in archives, archives
           assert pathlib.Path("drivers/NativeLegacyDisplay/NativeLegacyDisplay.cpp").is_file()
+          ipsw = board["ipsw"]
+          assert ipsw["url"].startswith("https://updates.cdn-apple.com/"), ipsw["url"]
+          assert ipsw["version"] in ipsw["url"] and ipsw["build"] in ipsw["url"], ipsw
+          assert ipsw["product"] and ipsw["device_class"], ipsw
+          assert isinstance(ipsw["chip_id"], int) and isinstance(ipsw["board_id"], int), ipsw
+          prelink = board["kernel"]["prelink"]
+          assert prelink["tool"].endswith("NativePrelink/emit_prelink.py"), prelink
+          assert prelink["kernel"].endswith("mach.development.bcm2837.unstripped.noctf"), prelink
+          assert prelink["slide"].startswith("-0x") and int(prelink["slide"], 16) < 0, prelink
+          assert prelink["roots"], prelink
           print("board.toml and defconfig: ok")
           PY
 
@@ -145,39 +155,28 @@ jobs:
           python3 unixnu fetch xnu libplatform libdispatch AvailabilityVersions \
               libpthread corecrypto-2023 IOStorageFamily -D "$RUNNER_TEMP/device"
 
-      - name: Build the kernel and the device archives
-        # The artifact this job exists to produce is libNativeSdhci.a, compiled
-        # against the real kernel ABI. The kernel step can also stop at the prelink
-        # gate, because [kernel.prelink] needs the target IPSW and its original
-        # kernelcache, and neither is chosen yet. That is the only tolerated outcome:
-        # the link itself must succeed, including the display probe symbol that
-        # drivers/NativeLegacyDisplay provides.
+      - name: Build the kernel, the device archives and the prelink candidate
+        # The whole chain must now succeed: compile XNU, build the board archives, link,
+        # then merge the source kernel with the kernelcache of board.toml [ipsw]. The
+        # IPSW is read with HTTP range requests, so only the kernelcache member crosses
+        # the network. There is no tolerated stop left for this board.
         run: |
+          set -o pipefail
           cd unixnu
-          set +e
           python3 unixnu build kernel -D "$RUNNER_TEMP/device" 2>&1 | tee "$GITHUB_WORKSPACE/kernel.log"
-          status=${PIPESTATUS[0]}
-          set -e
 
           archive=$(find "$UNIXNU_OUT" -name 'libNativeSdhci.a' -print -quit || true)
           if [ -z "$archive" ]; then
-            echo "::error::NativeSdhci was not compiled; the kernel step failed before the archives"
+            echo "::error::NativeSdhci was not compiled; the build stopped before the archives"
+            exit 1
+          fi
+          prelink=$(find "$UNIXNU_OUT" -path '*/kernel/kernel.macho' -print -quit || true)
+          if [ -z "$prelink" ]; then
+            echo "::error::prelink produced no kernel.macho"
             exit 1
           fi
           echo "archive: $archive"
-
-          if [ "$status" -eq 0 ]; then
-            echo "kernel step succeeded"
-            exit 0
-          fi
-
-          if grep -q "kernel.prelink" "$GITHUB_WORKSPACE/kernel.log"; then
-            echo "kernel step stopped at the prelink gate, as expected for this board"
-            exit 0
-          fi
-
-          echo "::error::the kernel step failed for a reason other than prelink"
-          exit 1
+          echo "prelink: $prelink"
 
       - name: Record what the driver compiled against
         run: |
@@ -185,12 +184,27 @@ jobs:
             -exec shasum -a 256 {} \;
           grep -h "NativeSdhci\|NativeLegacyDisplay\|archive" "$UNIXNU_OUT"/*/logs/archive-*.log | tail -20 || true
 
+      - name: Record the prelink inputs and output
+        # The kernelcache hash is what [kernel.prelink] kernelcache_sha256 pins, and the
+        # prelink hash identifies the candidate this run produced.
+        run: |
+          shasum -a 256 "$UNIXNU_OUT"/*/ipsw/*/kernelcache.decompressed
+          shasum -a 256 "$UNIXNU_OUT"/*/kernel/kernel.macho
+          python3 - "$UNIXNU_OUT" <<'PY'
+          import json, pathlib, sys
+          for report in pathlib.Path(sys.argv[1]).glob('*/kernel/kernel.json'):
+              data = json.loads(report.read_text())
+              print(report, 'components:', len(data.get('components', [])))
+              print('  roots:', ', '.join(data.get('components', [])[:8]))
+          PY
+
       - uses: actions/upload-artifact@v4
         with:
           name: lumia950-native-sdhci
           path: |
             out/*/tree/build/native-sdhci/**
             out/*/tree/build/native-legacy-display/**
+            out/*/kernel/**
             out/*/logs/**
             kernel.log
           if-no-files-found: error

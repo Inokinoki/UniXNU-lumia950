@@ -33,11 +33,44 @@ archives = [
   "build-arm-driver.py NativeLegacyDisplay",
   # "build-arm-driver.py NativeRamBlock",   # Data volume; also needs the virtio bindings builder
 ]
-# TODO: qualify the prelink policy and the original kernelcache hash for the chosen IPSW.
-# TODO: choose the IPSW identity independently; do not inherit sheng's identifiers. The
-#       [ipsw] section wants url, product, version, build, device_class, chip_id and board_id
-#       for a real image, so it is absent until that image is chosen and pinned.
+# TODO: pin the extracted kernelcache and its decompressed Mach-O (sha256) once the first
+#       prelink run has produced them.
 # TODO: obtain the real userdata GPT geometry (first_lba, last_lba) read-only from the phone.
+
+# The Apple reference image. It supplies the original kernelcache that prelink merges with
+# the source kernel. The XNU pin of feeds.toml (xnu-10063.141.1, Darwin 23.6.0) is the 17.x
+# tree, so the image has to come from the same build family: an iOS 16 kernelcache would
+# carry components the source ABI is not qualified against.
+#
+# The identity is this board's own: iPad7,3 (j207ap) rather than the iPad7,1 identity
+# another port uses. The restore image is shared by iPad7,1 through iPad7,4, and all four
+# identities name the same kernelcache member (kernelcache.release.ipad7), so the choice
+# changes the DeviceTree and trust cache members, not the kernel this prelink reads.
+[ipsw]
+url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+product = "iPad7,3"
+version = "17.7.11"
+build = "21H461"
+device_class = "j207ap"
+chip_id = 0x8011
+board_id = 4
+# Only what prelink reads today. DeviceTree and the trust caches join this list when the
+# payload and boot stages exist and name their inputs.
+fetch = ["KernelCache"]
+
+[kernel.prelink]
+tool = "kits/NativePrelink/emit_prelink.py"
+kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
+# The native kernel slot is built for ARM64_PLKSEG_ADDR 0xfffffff004004000; the slide moves
+# the original coalesced segments onto it.
+slide = "-0x1000000"
+# Minimal set for this rung: the platform expert and the root file system. The prelink
+# refuses a component whose declared dependency is not selected, so this list grows only
+# when a run names the missing bundle.
+roots = [
+  "com.apple.driver.AppleARMPlatform",
+  "com.apple.filesystems.apfs",
+]
 
 # TODO: [firmware]. UniXNU ports start from a Mu-Silicium UEFI port, and Mu-Silicium has no
 #       MSM8992 target today. The Lumia 950 has its own EDK2 firmware (Lumia950XLPkg) that
