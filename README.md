@@ -85,7 +85,7 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | --- | --- |
 | Device repository | `board.toml`, defconfig, `NativeSdhci`, build and test scripts; accepted by `unixnu status` as `[EXAMPLE]` |
 | UEFI firmware | not built here; the phone's own Lumia950XLPkg starts the payload |
-| Chainload payload | built and staged by the `payload` job ([run 39868619880](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39868619880)), artifact `lumia950-payload`; not yet loaded by a phone |
+| Chainload payload | built and staged by the `payload` job ([run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766)), artifact `lumia950-payload`; not yet loaded by a phone |
 | UniXNU menu | `UniXNU.efi` builds for AArch64 UEFI; not yet drawn on the panel |
 | DarwinBoot | `DarwinBoot.efi` builds standalone from its DSC; not yet loaded |
 | XNU entry | blocked on the kernel line and the GICv2 question |
@@ -103,7 +103,7 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | CI workflow file | YAML parse, `bash -n` on all 17 run blocks | clean |
 | Chainload payload configuration | `python3 scripts/check-payload.py` | accepted; the keys and enums are the ones `UniXNULib/Config.c` reads |
 | Payload staging | `stage-esp.py` and `check-payload.py --payload-dir` on fixture EFI files | tree staged at `EFI/UniXNU` and accepted |
-| Chainload payload build | `payload` job, [run 39868619880](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39868619880) | `UniXNU.efi` 95232 B, `DarwinBoot.efi` 26112 B, config 2119 B; staged tree checked, artifact uploaded |
+| Chainload payload build | `payload` job, [run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766) | `UniXNU.efi` and `BOOTAA64.EFI` 95232 B, `DarwinBoot.efi` 26112 B, config 2119 B; staged tree checked, artifact uploaded |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
 | XNU kernel link | same run | links with the board archives |
 
