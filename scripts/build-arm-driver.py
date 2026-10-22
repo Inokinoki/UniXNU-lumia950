@@ -36,6 +36,12 @@ COMPONENTS = {
         # osfmk is where the recorded recipe resolves <mach/...> from.
         "include": ["drivers/NativeSdhci", "build/storage-abi/include", ".cache/xnu-work/osfmk"],
     },
+    "NativeLegacyDisplay": {
+        # Not a matched driver: it exists so the kernel link resolves the probe symbol
+        # that upstream's bsd_init.c calls without an XNU_NATIVE_LEGACY_DISPLAY guard.
+        "sources": ["drivers/NativeLegacyDisplay/NativeLegacyDisplay.cpp"],
+        "out": "native-legacy-display",
+    },
     "NativeRamBlock": {
         "sources": ["drivers/NativeRamBlock/NativeRamBlock.cpp"],
         "out": "native-ram-block",

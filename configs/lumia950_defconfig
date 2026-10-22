@@ -17,6 +17,12 @@ CONFIG_XNU_SOURCE_CORECRYPTO14=y
 # scripts/build-arm-driver.py against the compile records of the XNU pass.
 CONFIG_XNU_BUILD_ARCHIVES=y
 
+# Upstream calls native_legacy_display_probe() from bsd_init.c without the
+# XNU_NATIVE_LEGACY_DISPLAY guard that every other call site has, so the kernel needs
+# the symbol even with the display provider unselected. The kernel script's
+# XNU_EXTRA_LD_ARCHIVES hook is for exactly this: a stub for an unselected offline probe.
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/native-legacy-display/libNativeLegacyDisplay.a"
+
 # The Data volume is a RAM block until the eMMC write path exists.
 # CONFIG_XNU_NATIVE_RAM_BLOCK is not set
 

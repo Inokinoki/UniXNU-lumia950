@@ -26,6 +26,11 @@ archives = [
   "build-arm-driver.py ArmDTPlatform",
   "build-arm-driver.py ArmCpu",
   "build-arm-driver.py NativeSdhci",
+  # Link input, not a driver: upstream calls native_legacy_display_probe() from
+  # bsd_init.c without the XNU_NATIVE_LEGACY_DISPLAY guard every other call site has,
+  # so the kernel needs the symbol even with the flag off. The defconfig force-loads
+  # this archive through XNU_EXTRA_LD_ARCHIVES.
+  "build-arm-driver.py NativeLegacyDisplay",
   # "build-arm-driver.py NativeRamBlock",   # Data volume; also needs the virtio bindings builder
 ]
 # TODO: qualify the prelink policy and the original kernelcache hash for the chosen IPSW.

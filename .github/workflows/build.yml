@@ -50,6 +50,10 @@ jobs:
                   if line.strip() and not line.startswith("#")]
           assert "CONFIG_XNU_NATIVE_SDHCI" in keys, keys
           assert "CONFIG_XNU_BUILD_ARCHIVES" in keys, keys
+          assert "CONFIG_XNU_EXTRA_LD_ARCHIVES" in keys, keys
+          archives = board["kernel"]["archives"]
+          assert "build-arm-driver.py NativeLegacyDisplay" in archives, archives
+          assert pathlib.Path("drivers/NativeLegacyDisplay/NativeLegacyDisplay.cpp").is_file()
           print("board.toml and defconfig: ok")
           PY
 
@@ -143,17 +147,11 @@ jobs:
 
       - name: Build the kernel and the device archives
         # The artifact this job exists to produce is libNativeSdhci.a, compiled
-        # against the real kernel ABI. The kernel step can also stop on two known
-        # gaps of the board, neither of which involves the driver:
-        #
-        #   * the prelink gate, because [kernel.prelink] needs the target IPSW and
-        #     its original kernelcache, and neither is chosen yet;
-        #   * the final link, because upstream's offline-component-load-probes.patch
-        #     calls native_legacy_display_probe() from bsd_init.c without a #if, and
-        #     this board has no display provider to define it.
-        #
-        # The run tolerates exactly those two outcomes. Any other failure, or any
-        # undefined symbol outside the display-provider set, fails the job.
+        # against the real kernel ABI. The kernel step can also stop at the prelink
+        # gate, because [kernel.prelink] needs the target IPSW and its original
+        # kernelcache, and neither is chosen yet. That is the only tolerated outcome:
+        # the link itself must succeed, including the display probe symbol that
+        # drivers/NativeLegacyDisplay provides.
         run: |
           cd unixnu
           set +e
@@ -178,34 +176,21 @@ jobs:
             exit 0
           fi
 
-          # Every undefined symbol, not only the expected one, so an unrelated link
-          # error cannot hide behind the display-provider tolerance.
-          undefined=$(grep -oE '^[[:space:]]+"[^"]+", referenced from:' "$GITHUB_WORKSPACE/kernel.log" \
-            | sed -E 's/^[[:space:]]+"([^"]+)",.*/\1/' | sort -u)
-          allowed="_native_legacy_display_probe _native_mobile_display_provider_probe"
-          bad=0
-          for symbol in $undefined; do
-            case " $allowed " in
-              *" $symbol "*) ;;
-              *) echo "::error::undefined symbol $symbol"; bad=1 ;;
-            esac
-          done
-          if [ "$bad" -ne 0 ] || [ -z "$undefined" ]; then
-            echo "::error::the kernel step failed for an unexpected reason"
-            exit 1
-          fi
-          echo "kernel link stops on the display-provider gap: $undefined"
+          echo "::error::the kernel step failed for a reason other than prelink"
+          exit 1
 
       - name: Record what the driver compiled against
         run: |
-          find "$UNIXNU_OUT" -name 'libNativeSdhci.a' -exec shasum -a 256 {} \;
-          grep -h "NativeSdhci\|archive" "$UNIXNU_OUT"/*/logs/archive-*.log | tail -20 || true
+          find "$UNIXNU_OUT" \( -name 'libNativeSdhci.a' -o -name 'libNativeLegacyDisplay.a' \) \
+            -exec shasum -a 256 {} \;
+          grep -h "NativeSdhci\|NativeLegacyDisplay\|archive" "$UNIXNU_OUT"/*/logs/archive-*.log | tail -20 || true
 
       - uses: actions/upload-artifact@v4
         with:
           name: lumia950-native-sdhci
           path: |
             out/*/tree/build/native-sdhci/**
+            out/*/tree/build/native-legacy-display/**
             out/*/logs/**
             kernel.log
           if-no-files-found: error
