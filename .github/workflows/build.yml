@@ -54,7 +54,7 @@ jobs:
           PY
 
       - name: Check the build scripts
-        run: python3 -m py_compile scripts/build-arm-driver.py
+        run: python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py
 
       - name: Host test of the driver core
         run: |
@@ -126,16 +126,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/device"
           rsync -a --exclude .git --exclude build --exclude out ./ "$RUNNER_TEMP/device/"
-          python3 - "$RUNNER_TEMP/device/board.toml" <<'PY'
-          import pathlib, sys
-          path = pathlib.Path(sys.argv[1])
-          text = path.read_text()
-          assert text.count("example = true") == 1, "guard line is not unique"
-          text = text.replace("example = true", "# example guard cleared in the CI scratch copy", 1)
-          path.write_text(text)
-          assert "example = true" not in path.read_text()
-          print("scratch board: example guard cleared")
-          PY
+          python3 scripts/ci-clear-example.py "$RUNNER_TEMP/device/board.toml"
 
       - name: Select the device and fetch the Apple references
         run: |
