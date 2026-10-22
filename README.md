@@ -29,11 +29,15 @@ structure, the register map with its sources, and the eMMC driver's host-testabl
 | Board and defconfig parse | `unixnu defconfig lumia950_defconfig -D lumia950` | accepted |
 | Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device` |
 | Incomplete-board guard | `unixnu build kernel --dry-run -D lumia950` | refused, as designed |
-| CI workflow file | YAML parse, `bash -n` on all 11 run blocks | clean |
+| CI workflow file | YAML parse, `bash -n` on all 12 run blocks | clean |
+| Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39856939504](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39856939504) | compiled clean under `-Werror`; `libNativeSdhci.a` sha256 `2510a90c…ea2c84` |
 
-The driver's *kernel* half (`NativeSdhci.cpp`) has never been compiled: it needs the XNU
-headers and a recorded compile recipe, which means macOS with Xcode. Treat its first compile
-as a milestone, not a formality.
+The driver's *kernel* half (`NativeSdhci.cpp`) compiles against the recorded kernel ABI,
+and the archive holds two ARM64 `MH_OBJECT` members: `NativeSdhci.o` and `SdhciCore.o`.
+The XNU link in that same run stops on `_native_legacy_display_probe`, which is outside the
+driver: upstream calls it from `bsd_init.c` with no `#if`, and this board has no display
+provider. `libNativeSdhci.a` is the milestone; the kernel's final link stays red until the
+board gains a display driver.
 
 ## Layout
 
