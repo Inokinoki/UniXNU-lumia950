@@ -4,8 +4,11 @@
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
-#include <IOKit/IOMemoryMap.h>
 #include <IOKit/storage/IOBlockStorageDevice.h>
+
+// IOMemoryMap has no header of its own in the kernel tree: IOService.h declares the
+// name for mapDeviceMemoryWithIndex(), and NativeSdhci.cpp includes the descriptor
+// header for the complete class.
 
 class NativeSdhci : public IOBlockStorageDevice {
     OSDeclareDefaultStructors(NativeSdhci)

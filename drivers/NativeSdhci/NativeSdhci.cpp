@@ -16,6 +16,7 @@
 // Until then the medium reports itself read-only, which is honest rather than
 // silently dropping writes.
 #include <IOKit/IOLib.h>
+#include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSNumber.h>
