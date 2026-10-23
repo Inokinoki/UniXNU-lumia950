@@ -1,0 +1,68 @@
+diff --git a/xnu-deps/setup.sh b/xnu-deps/setup.sh
+index 005dd06..90759e2 100755
+--- a/xnu-deps/setup.sh
++++ b/xnu-deps/setup.sh
+@@ -11,7 +11,8 @@
+ #
+ # Needs on the machine: git curl tar xz make cc clang flex bison m4 perl python3 autoconf
+ # automake, and theos ($THEOS, default ~/theos) with its Linux toolchain
+-# (toolchain/linux/iphone: the cctools linker) and sdks/iPhoneOS16.5.sdk.
++# (toolchain/linux/iphone: the cctools linker) and sdks/iPhoneOS16.5.sdk. The uuid headers that
++# hostcompat.h includes are not part of libc: the package that carries them is installed here.
+ #
+ # What ends up where (all under xnu-deps/, none of it committed):
+ #   AvailabilityVersions libdispatch libpthread     Apple open source, at the releases of iOS 16.5
+@@ -52,6 +53,29 @@ link() {
+ 	[ "$(readlink "$2" 2>/dev/null)" = "$1" ] || ln -sfn "$1" "$2"
+ }
+ 
++# need_uuid_headers: <uuid/uuid.h>, which hostinc/hostcompat.h includes in every host tool
++# (SETUP/config and the mig rewrite fail without it). The header is not part of libc, and the package
++# that carries it is named differently everywhere, so it is installed here instead of asked for.
++need_uuid_headers() {
++	printf '#include <uuid/uuid.h>\n' | cc -E -x c - >/dev/null 2>&1 && return 0
++	local pkg manager as_root=()
++	if command -v apt-get >/dev/null; then manager=apt-get; pkg=uuid-dev
++	elif command -v dnf >/dev/null; then manager=dnf; pkg=libuuid-devel
++	elif command -v pacman >/dev/null; then manager=pacman; pkg=util-linux
++	else die "no uuid/uuid.h: install the uuid development package of your distribution"
++	fi
++	[ "$(id -u)" = 0 ] || { command -v sudo >/dev/null && as_root=(sudo); } ||
++		die "no uuid/uuid.h and no root or sudo to install $pkg"
++	log "installing $pkg (uuid/uuid.h)"
++	case "$manager" in
++	apt-get) "${as_root[@]}" apt-get install -y -qq "$pkg" >/dev/null ;;
++	dnf) "${as_root[@]}" dnf install -y -q "$pkg" >/dev/null ;;
++	pacman) "${as_root[@]}" pacman -S --needed --noconfirm "$pkg" >/dev/null ;;
++	esac
++	printf '#include <uuid/uuid.h>\n' | cc -E -x c - >/dev/null 2>&1 ||
++		die "still no uuid/uuid.h after installing $pkg"
++}
++
+ # replace FILE with what is on standard input, unless it is the same already (make looks at time stamps)
+ update() {
+ 	cat > "$1.new"
+@@ -64,6 +88,9 @@ stage1() {
+ 		command -v $tool >/dev/null || missing="$missing $tool"
+ 	done
+ 	[ -z "$missing" ] || die "not installed:$missing"
++	# in every host tool this includes uuid/uuid.h: check it here so the failure names the package
++	# and not a compiler error deep inside the header export
++	need_uuid_headers
+ 	[ -x "$CCTOOLS/ld" ] || die "no cctools in $CCTOOLS: install theos with its Linux toolchain (or set THEOS)"
+ 	[ -d "$IOS_SDK/usr/include" ] || die "no $IOS_SDK (the SDKs of github.com/theos/sdks go to \$THEOS/sdks)"
+ 
+@@ -120,6 +147,13 @@ stage1() {
+ 	for tool in nm otool strip lipo libtool nmedit ctf_insert codesign_allocate install_name_tool; do
+ 		link "$CCTOOLS/$tool" host/bin/$tool
+ 	done
++	# the kernel's .dSYM: XNU's makefile asks xcrun (ours, host/bin/xcrun) for dsymutil, and xcrun
++	# looks in host/bin and /usr/bin only -- the toolchain's copy has to be reachable there
++	if [ -x "$CCTOOLS/dsymutil" ]; then
++		link "$CCTOOLS/dsymutil" host/bin/dsymutil
++	else
++		log "no dsymutil in $CCTOOLS: the kernel build stops at the .dSYM unless BUILD_DSYM=0"
++	fi
+ 	link "$CCTOOLS/ld" host/bin/ld64
+ 	link xnu-clang host/bin/xnu-clang++
+ 
