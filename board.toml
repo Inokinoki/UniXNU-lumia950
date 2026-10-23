@@ -36,8 +36,9 @@ archives = [
 # TODO: obtain the real userdata GPT geometry (first_lba, last_lba) read-only from the phone.
 
 # The Apple reference image: iPhone X, iOS 16.7.16. The port requires 16.x, so the kernel
-# source and the kernelcache kexts have to come from the same 16.x line; the tree's XNU pin
-# is 17.x, which is why prelink is paused (see the TODO below).
+# source and the kernelcache kexts come from the same line: feeds.toml pins
+# xnu-8796.141.3 and patches/xnu-8796/ adapts the patch set to it. Prelink waits for a
+# built kernel image (see the TODO below).
 #
 # The identity is the phone-shaped one: iPhone10,6 (d221ap), one of the two products this
 # restore serves (iPhone10,3 is d22ap). The pinned values were read from the image's own
@@ -54,13 +55,12 @@ board_id = 14
 # name their inputs.
 fetch = ["KernelCache"]
 
-# TODO: [kernel.prelink] returns with a 16.x kernel route. It cannot run against the current
-#       source pin: feeds.toml builds xnu-10063.141.1 (Darwin 23.6.0, 17.x), and the prelink
-#       merges that kernel with the kexts of this 16.7.16 kernelcache, which are built for a
-#       different XNU. Measured: 44 of the 56 XNU patches apply to xnu-8796.141.3, the 16.x
-#       tree; 12 fail, including the 4K pmap patch whose target file
-#       (osfmk/arm64/sptm/pmap/pmap.c) does not exist there, and the NativePrelink patches
-#       are named for xnu-10063.141.1.
+# TODO: [kernel.prelink] returns when a 16.x kernel image exists to merge with this
+#       kernelcache. The source line is settled: feeds.toml pins xnu-8796.141.3 and
+#       patches/xnu-8796/ adapts the patch set to it — 47 base patches unchanged, 5 replaced
+#       by their 8796 form, 7 skipped with a stated reason, and NativePrelink's kit patches
+#       gated by their file name. What is missing is the image itself: the kernel job has to
+#       compile and link the 16.x tree and leave the file this section names.
 
 # [firmware] stays absent on purpose. The route is chainload: the phone's own UEFI
 # (Lumia950XLPkg) starts \EFI\UniXNU\UniXNU.efi from EFIESP, so this repository builds no
@@ -73,8 +73,10 @@ fetch = ["KernelCache"]
 #       scripts/build-payload.sh. When the kernel line opens, the two converge on the same
 #       \EFI\UniXNU\Payloads layout, and this section names what the ADT generator emits.
 #
-#       The ADT generator (make-lumia950-adt.py) has to emit the Apple node encoding with
-#       this SoC's addresses, a /chosen NVRAM proxy, the memory-map placeholders and the
-#       identity properties. The node spec for it is in README.md.
-#       dram_size must come from the firmware's memory map, not from the 3 GiB marketing
-#       figure: reserved regions carve into it.
+#       The ADT generator exists: scripts/make-lumia950-adt.py, checked by scripts/check-adt.py
+#       (the validate job runs both, including its defect self-test). It emits the Apple node
+#       encoding with this SoC's addresses, a /chosen NVRAM proxy, the memory-map placeholders
+#       and the identity properties; README.md carries the node spec.
+#       What is still missing is the section itself: [payload] needs dram_size from the
+#       firmware's memory map, not the 3 GiB marketing figure, because reserved regions carve
+#       into it, and it needs a kernel to place next to the ADT.

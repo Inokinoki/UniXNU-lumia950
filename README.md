@@ -27,17 +27,17 @@ Mu-Silicium is not the base: it has no MSM8992 target, and its installation mode
 Android boot image that an Android bootloader loads with `fastboot`, which a Lumia does not
 have. Chainloading also keeps the experiment reversible — nothing is flashed.
 
-Two firmware services decide whether the menu can work, and neither has been observed on
-this phone:
+Two firmware services decide whether the menu can work. Both were measured on the 950 on
+2026-10-23:
 
-| Service | It decides | If it is missing |
+| Service | It decides | Observed |
 | --- | --- | --- |
-| `EFI_GRAPHICS_OUTPUT_PROTOCOL` | whether the menu draws | `[ui] console = "text"` falls back to UGA text, or nothing appears |
-| `EFI_SIMPLE_TEXT_IN_PROTOCOL` | whether keys reach the menu | the countdown runs out and the default entry exits to the firmware |
+| `EFI_GRAPHICS_OUTPUT_PROTOCOL` | whether the menu draws | present: the logo and the three cards drew on the 1440x2560 panel |
+| `EFI_SIMPLE_TEXT_IN_PROTOCOL` | whether keys reach the menu | present: the volume keys move the selection |
 
 UniXNU's menu reads `ConIn`; touch arrives as an absolute pointer, which the menu does not
-consume. The Lumia's buttons reach it only if the firmware publishes them as a text input
-device.
+consume. That the firmware publishes the buttons as a text input device is measured now,
+not assumed.
 
 ### Testing it on the phone
 
@@ -57,6 +57,12 @@ Unlocking with WPInternals and installing the Lumia950XLPkg UEFI (`UEFI.elf` in 
 root, the Boot Shim application, a BCD entry for it) come first and are not in this
 repository. That is the one step in the whole plan that can brick the phone.
 
+How that entry is selected matters on these stores: the phone's boot manager has
+`displaybootmenu No`, `timeout 0` and a persistent `bootsequence`, so adding the entry to
+`displayorder` does nothing. Pointing `{bootmgr} bootsequence` at the BootShim entry is
+what actually boots it, and pointing it back at the mobile-startup GUID
+(`{01de5a27-8705-40db-bad6-96fa5187d4a6}`) is the revert.
+
 1. Mount EFIESP in Mass Storage Mode and back up `\EFI\BOOT`. Windows Phone's own loader is
    ARM32 (`BOOTARM.EFI`), so `BOOTAA64.EFI` is usually free — but if one is already there it
    is somebody else's fallback loader, so rename it rather than overwriting it.
@@ -72,7 +78,7 @@ What each outcome means:
 | --- | --- |
 | no menu, the firmware menu appears after a few seconds | the image did not load: check the copy is 95232 bytes and AArch64 |
 | text console instead of cards | GOP is present but the graphics path is not; see `[ui] console` |
-| menu draws, buttons do nothing | no key reaches `ConIn`; the 20 s timer still exits to the firmware |
+| menu draws, `Restart` / `Power off` do nothing | MSM8992 has no PSCI SYSTEM_RESET or SYSTEM_OFF; those entries call the firmware's `ResetSystem` |
 | menu draws, `Restart` or `Power off` does nothing | the firmware's `ResetSystem` for that action is a stub |
 
 The firmware registers a `UEFI Shell` boot option from a file GUID in its volume and maps it
@@ -84,10 +90,11 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | Layer | State |
 | --- | --- |
 | Device repository | `board.toml`, defconfig, `NativeSdhci`, build and test scripts; accepted by `unixnu status` as `[EXAMPLE]` |
-| UEFI firmware | not built here; the phone's own Lumia950XLPkg starts the payload |
-| Chainload payload | built and staged by the `payload` job ([run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766)), artifact `lumia950-payload`; not yet loaded by a phone |
-| UniXNU menu | `UniXNU.efi` builds for AArch64 UEFI; not yet drawn on the panel |
+| UEFI firmware | not built here; the phone's own Lumia950XLPkg was observed starting `\EFI\BOOT\BOOTAA64.EFI` |
+| Chainload payload | built by the `payload` job ([run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766)), artifact `lumia950-payload`; loaded on the phone on 2026-10-23 through the BCD `bootsequence` entry |
+| UniXNU menu | drawn on the 1440x2560 panel in the portrait card layout, three action entries, volume keys move the selection; touch is not consumed |
 | DarwinBoot | `DarwinBoot.efi` builds standalone from its DSC; not yet loaded |
+| ADT | generated and checked on the host (11976 B, six CPUs, NVRAM proxy); not yet handed to a kernel |
 | XNU entry | blocked on the kernel line and the GICv2 question |
 | Storage driver | written, host-tested, never run on hardware |
 | Root volume and userland | not started |
@@ -104,6 +111,8 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | Chainload payload configuration | `python3 scripts/check-payload.py` | accepted; the keys and enums are the ones `UniXNULib/Config.c` reads |
 | Payload staging | `stage-esp.py` and `check-payload.py --payload-dir` on fixture EFI files | tree staged at `EFI/UniXNU` and accepted |
 | Chainload payload build | `payload` job, [run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766) | `UniXNU.efi` and `BOOTAA64.EFI` 95232 B, `DarwinBoot.efi` 26112 B, config 2119 B; staged tree checked, artifact uploaded |
+| On-phone chainload | mass-storage copy of `out/payload/EFI`, BCD `bootsequence` pointed at the `\EFI\boot\BootShim.efi` entry | Lumia splash then the UniXNU menu with three cards; volume keys move the selection (2026-10-23) |
+| ADT generator and checker | `python3 scripts/make-lumia950-adt.py --dram-size 0xC0000000 --unique-chip-id ... --chip-id 0x8015` then `python3 scripts/check-adt.py build/lumia950.adt` | 11976-byte tree with 6 CPUs accepted; the checker's `--self-test` rejects 7 deliberate defects, including a broken NVRAM Adler-32 |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
 | XNU kernel link | same run | links with the board archives |
 
@@ -118,18 +127,23 @@ is referenced even with the display provider unselected. `drivers/NativeLegacyDi
 defines both probe entry points and does nothing else — no framebuffer, no provider — and
 the defconfig force-loads it through the kernel script's `XNU_EXTRA_LD_ARCHIVES` hook.
 
-Prelink is paused, and the reason is a version line, not a defect. The port must be iOS 16,
-but the source pin is `xnu-10063.141.1` (Darwin 23.6.0, 17.x). The prelink merges the
-source kernel with the kexts of the IPSW kernelcache, and those kexts are built for one
-XNU: a 17.x kernel with the 16.7.16 kernelcache would call into components from another
-ABI. The 17.x candidate that used to be produced here (12 components) answered the tool,
-not the requirement.
+Prelink is paused for a missing image, not a version. The source pin is now the 16.x tree,
+but the board has no built kernel and no `[kernel.prelink]`, so there is nothing to merge
+with the kexts of the 16.7.16 kernelcache yet. The candidate produced while the pin was
+17.x (12 components) answered the tool and not the requirement: those kexts belong to a
+different XNU ABI.
 
-Moving the kernel to 16.x is measured, not guessed: of 56 XNU patches, 44 apply to
-`xnu-8796.141.3` (the 16.x tree) and 12 do not — among them the 4K pmap patch, whose
-target `osfmk/arm64/sptm/pmap/pmap.c` does not exist in 16.x, and NativePrelink's own
-patches are named for `xnu-10063.141.1`. Until that route is taken, `[kernel.prelink]`
-stays out and the kernel job stops at the prelink gate.
+The kernel is on 16.x now. `feeds.toml` pins `xnu-8796.141.3` — a source of the same name
+replaces the base repository's 17.x entry — and `patches/xnu-8796/` is that line's overlay.
+Of the 54 base patches, 47 apply unchanged; five are replaced by their 8796 form (the
+non-Apple tunables guards, the external archive hook, the machine layer, the native AES
+personalities and the 64-bit physical address shift); and `skip.txt` names the seven this
+line has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, no
+exclave owner chain, no boot-progress console. NativePrelink's kit patches carry their
+line in the file name, so 8796 does not take them. The build prints every skip and refuses
+a skip list that names a patch the base tree no longer has, so an omission cannot become a
+silent hole. `[kernel.prelink]` stays out until a 16.x kernel image exists to merge, so the
+kernel job still stops at the prelink gate — now after compiling the right source line.
 
 ## The reference image
 
@@ -249,34 +263,50 @@ and the archive itself through `-Wl,-force_load` so the linker keeps the class.
 
 ## The ADT node
 
-The driver matches an `/arm-io` child. The ADT generator (`make-lumia950-adt.py`, not
-written yet) must emit at least:
+[scripts/make-lumia950-adt.py](scripts/make-lumia950-adt.py) emits the tree and
+[scripts/check-adt.py](scripts/check-adt.py) parses it back before DarwinBoot ever sees it.
+The driver matches an `/arm-io` child:
 
 ```
 /arm-io/sdhci@f9824900 {
-    name = "sdhci";
+    name = "sdhci@f9824900";
     compatible = "qcom,msm8994-sdhci", "qcom,sdhci-msm-v4";
-    reg = <0xf9824900 0x1a0 0xf9824000 0x800>;
+    reg = <0xf9824900 0x1a0 0xf9824000 0x800>;   # two windows, 64-bit values
     interrupts = <0 123 4 0 138 4>;
     clock-frequency = <19200000>;
 };
 ```
 
-The three-cell interrupt encoding is Apple's; confirm it against a ported device's ADT before
-trusting it. The generator also owes `/chosen` (with `random-seed`, an NVRAM proxy, the DRAM
-description and `osenvironment`), `/cpus`, `/defaults`, `/options`, and the
-`/chosen/memory-map` placeholders DarwinBoot fills. `unique-chip-id` and `chip-id` must be
-present or anything calling `gethostuuid()` blocks forever.
+The cell layout is the one in [scripts/qemu-entry/make-dt.py](../unixnu/scripts/qemu-entry/make-dt.py):
+two address cells and two size cells, every address and size a 64-bit little-endian value.
+That fixture is the only ADT this project has watched a real `ArmDTPlatform::configure`
+accept, so it is the layout to follow. The earlier four-cell `reg` sketch in this file assumed
+one-cell addressing and is superseded. The three-cell interrupt encoding is still Apple's,
+confirmed only structurally: no driver here has consumed one yet.
+
+The generator emits `/chosen` (random seed, CHRP NVRAM proxy, DRAM base and size,
+`osenvironment`, and the `unique-chip-id`/`chip-id` pair), `/cpus` (six cores, boot CPU
+first), `/psci`, `/defaults`, `/options`, `/product`, and `/arm-io` with the GICv2 and SDHCI
+windows. The NVRAM proxy follows the layout
+`iokit/Kernel/IONVRAMCHRPHandler.cpp` parses, down to the Adler-32 it panics on, and the
+checker recomputes that checksum rather than trusting the generator. `unique-chip-id` and
+`chip-id` are required because anything calling `gethostuuid()` blocks forever without them;
+the checker refuses a tree that omits them unless explicitly told to allow it.
+
+What the tree does not solve: `intc` describes a real GICv2 while ArmCpu's interrupt path is
+GICv3-only (blocker 2), PSCI is the MSM8992 subset without SYSTEM_OFF/SYSTEM_RESET
+(blocker 4), and no display node is emitted because there is no MDSS driver to match it.
 
 ## Blockers
 
-1. **The route is decided; the firmware environment is not measured.** The phone boots its
+1. **The route is decided and the firmware environment is measured.** The phone boots its
    own Lumia950XLPkg UEFI and that firmware starts `UniXNU.efi` from EFIESP. Because this
-   repository builds no firmware volume, `[firmware]` and `unixnu bootimg` stay unused and
-   `example = true` stays until the payload has run. What is unproven is the environment the
-   application gets: whether GOP still describes the panel, whether any `ConIn` device exists
-   for the menu, and whether the boot manager holds an entry for the application or needs
-   `UniXNUDxe` to register one.
+   repository builds no firmware volume, `[firmware]` and `unixnu bootimg` stay unused. The
+   chain ran on the phone on 2026-10-23 — BCD `bootsequence` → BootShim → `UEFI.elf` →
+   `\EFI\BOOT\BOOTAA64.EFI` → the menu — with GOP drawing the cards and `ConIn` delivering
+   volume-key input, and no `UniXNUDxe` entry: `SplashApp`'s `DiscoverAndBootApp` finds the
+   removable-media name. `example = true` stays until the kernel route opens, not because
+   the payload is unrun.
 2. **The interrupt controller is GICv2** (`qcom,msm-qgic2`, no redistributors). ArmCpu's GIC
    path is the generic GICv3 one on every ported board, so interrupts — including the eMMC
    completion interrupt — are gated on that work. Polling keeps the storage rung moving
@@ -304,10 +334,11 @@ not have either, so this repository carries
 | `payload` | `ubuntu-latest` | manual, `target=payload` (the default) | installs clang, lld and the EDK II host tools, clones Mu_Basecore, builds `UniXNU.efi` and `DarwinBoot.efi`, stages `out/payload` and checks it |
 | `kernel` | `macos-latest` | manual, `target=kernel` | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, and links |
 
-The `kernel` job compiles and links, then stops at the prelink gate because the board has no
-`[kernel.prelink]` while the source pin is 17.x. That one stop is tolerated and every other
-failure fails the job, so the archive and the link stay verified. When a 16.x kernel route
-lands, the prelink section and its pin return and the gate goes away.
+The `kernel` job compiles and links the 16.x source line, then stops at the prelink gate
+because the board has no `[kernel.prelink]` (there is no kernel image yet to merge with the
+IPSW kernelcache). That one stop is tolerated and every other failure fails the job, so the
+archive and the link stay verified. When the kernel exists, the prelink section and its pin
+return and the gate goes away.
 
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.

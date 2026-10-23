@@ -68,21 +68,63 @@ jobs:
           assert ipsw["version"] in ipsw["url"] and ipsw["build"] in ipsw["url"], ipsw
           assert ipsw["product"] == "iPhone10,6" and ipsw["device_class"] == "d221ap", ipsw
           assert ipsw["chip_id"] == 0x8015 and ipsw["board_id"] == 14, ipsw
-          # Prelink is deliberately absent while the source pin is 17.x: merging that
-          # kernel with a 16.x kernelcache would join components from another ABI.
+          # Prelink is deliberately absent until a 16.x kernel image exists; merging the
+          # 17.x kernel with this kernelcache would join components from another ABI.
           assert "prelink" not in board["kernel"], board["kernel"]
           print("board.toml and defconfig: ok")
           PY
 
+      - name: The 16.x patch line has no holes
+        # feeds.toml moves the build to xnu-8796.141.3, and UniXNU carries that line's patch
+        # overlay. A skip must name a base patch and state why: an omission that outlives its
+        # patch would hide a lost fix. A replacement must shadow a base patch, because the
+        # build applies it in that patch's place and order.
+        run: |
+          python3 - <<'PY'
+          import pathlib, tomllib
+          feeds = tomllib.loads(pathlib.Path("feeds.toml").read_text())
+          xnu = next(s for s in feeds["source"] if s["name"] == "xnu")
+          assert xnu["ref"] == f"xnu-{xnu['version']}", xnu
+          line = "xnu-" + xnu["version"].split(".")[0]
+          base = pathlib.Path("unixnu/patches/xnu")
+          overlay = pathlib.Path("unixnu/patches") / line
+          skips = {}
+          for row in (overlay / "skip.txt").read_text().splitlines():
+              if not row.strip() or row.lstrip().startswith("#"):
+                  continue
+              name, _, reason = row.partition(":")
+              skips[name.strip()] = reason.strip()
+          assert skips, "skip.txt names nothing"
+          for name, reason in skips.items():
+              assert (base / f"{name}.patch").is_file(), name
+              assert reason, name
+          replaced = {p.stem for p in overlay.glob("*.patch")}
+          for name in replaced:
+              assert (base / f"{name}.patch").is_file(), name
+          assert not replaced & set(skips), replaced & set(skips)
+          print(f"{line}: {len(replaced)} replaced, {len(skips)} skipped")
+          PY
+
       - name: Check the build scripts
         run: |
-          python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py scripts/check-payload.py
+          python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py scripts/check-payload.py \
+              scripts/make-lumia950-adt.py scripts/check-adt.py
           bash -n scripts/build-payload.sh
 
       - name: Check the chainload payload configuration
         # The keys and enums are the ones UniXNULib/Config.c reads, so a typo fails here
         # rather than as an error line on a phone screen.
         run: python3 scripts/check-payload.py
+
+      - name: The ADT generator and its checker
+        # DarwinBoot hands this tree to XNU. The checker parses it with the encoding XNU reads,
+        # and --self-test proves it rejects defects instead of only accepting good input.
+        run: |
+          python3 scripts/make-lumia950-adt.py --output build/lumia950.adt \
+              --dram-size 0xC0000000 --unique-chip-id 1122334455667788 --chip-id 0x8015 \
+              --owned-memory-size 0x20000000
+          python3 scripts/check-adt.py build/lumia950.adt
+          python3 scripts/check-adt.py --self-test
 
       - name: Host test of the driver core
         run: |
@@ -228,11 +270,11 @@ jobs:
               libpthread corecrypto-2023 IOStorageFamily -D "$RUNNER_TEMP/device"
 
       - name: Build the kernel and the device archives
-        # The board targets iOS 16 but the source pin is the 17.x tree, so there is no
-        # [kernel.prelink]: merging a 17.x kernel with the 16.7.16 kernelcache would join
-        # components built for a different XNU. The kernel step therefore compiles, builds
-        # the archives and links, then stops at the prelink gate. That one stop is
-        # tolerated; every other failure fails the job.
+        # feeds.toml pins the 16.x tree, so the compile is the right source line for this
+        # 16.7.16 image. There is no [kernel.prelink] because there is no built kernel to
+        # merge with the kernelcache yet. The kernel step therefore compiles, builds the
+        # archives and links, then stops at the prelink gate. That one stop is tolerated;
+        # every other failure fails the job.
         run: |
           set +e
           cd unixnu
