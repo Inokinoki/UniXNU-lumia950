@@ -1,0 +1,333 @@
+diff --git a/docs/porting/device-repository.md b/docs/porting/device-repository.md
+index 31a3cd3..38b1a6a 100644
+--- a/docs/porting/device-repository.md
++++ b/docs/porting/device-repository.md
+@@ -218,6 +218,22 @@ unique_chip_id = "required"
+ 
+ The `[payload.adt]` keys are passed to the ADT tool. The tool contract is device specific. The generic keys are documented in [Device tree](/porting/device-tree).
+ 
++## Patches of another source line
++
++The patches in `patches/xnu/` are written for the XNU version the base `feeds.toml` pins. A board
++that pins another line through its own `feeds.toml` supplies `patches/xnu-<major>/`, the overlay
++of that line:
++
++- `<name>.patch` replaces `patches/xnu/<name>.patch` and is applied in its place, so the base
++  order is kept.
++- `skip.txt` names base patches the line does not have, one `name: reason` per line. The build
++  prints every skip and refuses a name that the base tree no longer carries, so an omission
++  cannot silently outlive its patch.
++- A patch in the overlay without a base counterpart adds to the line.
++
++`kits/NativePrelink/patches/` is gated by file name instead: `xnu-<version>-*.patch` applies only
++when the pinned version matches.
++
+ ## Defconfig
+ 
+ `configs/<name>_defconfig` uses the same syntax as a Linux defconfig:
+diff --git a/patches/xnu-8796/apple-only-cpu-tunables.patch b/patches/xnu-8796/apple-only-cpu-tunables.patch
+new file mode 100644
+index 0000000..e6f7019
+--- /dev/null
++++ b/patches/xnu-8796/apple-only-cpu-tunables.patch
+@@ -0,0 +1,27 @@
++diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
++index 6fc5994..6bfc3cd 100644
++--- a/osfmk/arm64/start.s
+++++ b/osfmk/arm64/start.s
++@@ -33,7 +33,9 @@
++ #include <mach_assert.h>
++ #include <machine/asm.h>
++ #include "assym.s"
+++#if defined(APPLE_ARM64_ARCH_FAMILY)
++ #include <arm64/tunables/tunables.s>
+++#endif
++ #include <arm64/exception_asm.h>
++ 
++ #if __ARM_KERNEL_PROTECT__
++@@ -784,10 +786,12 @@ common_start:
++ 	// Initialization common to all non-virtual Apple targets
++ #endif  // APPLE_ARM64_ARCH_FAMILY
++ 
+++#if defined(APPLE_ARM64_ARCH_FAMILY)
++ 	// Read MIDR before start of per-SoC tunables
++ 	mrs x12, MIDR_EL1
++ 
++ 	APPLY_TUNABLES x12, x13, x14
+++#endif
++ 
++ 
++ #if HAS_CLUSTER
+diff --git a/patches/xnu-8796/external-archive-dependencies.patch b/patches/xnu-8796/external-archive-dependencies.patch
+new file mode 100644
+index 0000000..8fd5ce1
+--- /dev/null
++++ b/patches/xnu-8796/external-archive-dependencies.patch
+@@ -0,0 +1,28 @@
++diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
++index 0358e38..e5a61f9 100644
++--- a/makedefs/MakeInc.def
+++++ b/makedefs/MakeInc.def
++@@ -858,6 +858,10 @@ LDFILES_KERNEL_ONLY = $(TARGET)/all-kpi.exp $(TARGET)/all-alias.exp $(TARGET)/sy
++ # Default runtime libraries to be linked with the kernel
++ #
++ LD_KERNEL_LIBS	   = -lcc_kext
+++# Archives linked from outside this source tree (device drivers, stubs for probes the board
+++# does not select). The build script passes the file list; the link target depends on it so an
+++# incremental build relinks when one of the archives changes.
+++XNU_EXTERNAL_KERNEL_ARCHIVES ?=
++ LD_KERNEL_ARCHIVES = $(LDFLAGS_KERNEL_SDK) -lfirehose_kernel
++ # Link opensource binary library
++ ifneq ($(filter T6000 T8101 VMAPPLE T6000 T8101 VMAPPLE,$(CURRENT_MACHINE_CONFIG)),)
++diff --git a/makedefs/MakeInc.kernel b/makedefs/MakeInc.kernel
++index b303c42..3a933db 100644
++--- a/makedefs/MakeInc.kernel
+++++ b/makedefs/MakeInc.kernel
++@@ -144,6 +144,8 @@ $(TARGET)/lib$(KERNEL_FILE_NAME).a: $(addprefix $(TARGET)/,$(foreach component,$
++ 	$(_v)$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/lib$(KERNEL_FILE_NAME).a $(OBJROOT)/lib$(KERNEL_FILE_NAME).a
++ endif
++ 
+++# Explicit external source archives participate in incremental relinking.
+++$(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(XNU_EXTERNAL_KERNEL_ARCHIVES)
++ $(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o nonlto.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion $(LDFILES_KERNEL_ONLY) .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
++ 	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
++ ifeq ($(PRE_LTO),1)
+diff --git a/patches/xnu-8796/native-aes-personality.patch b/patches/xnu-8796/native-aes-personality.patch
+new file mode 100644
+index 0000000..21e8875
+--- /dev/null
++++ b/patches/xnu-8796/native-aes-personality.patch
+@@ -0,0 +1,53 @@
++diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
++index 0dc07de..a556094 100644
++--- a/iokit/KernelConfigTables.cpp
+++++ b/iokit/KernelConfigTables.cpp
++@@ -56,4 +56,48 @@ const char * gIOKernelConfigTables =
++     "     'IOProviderClass' = IOPlatformExpertDevice;"
++     "     'IOProbeScore'    = 0:32;"
++     "   }"
+++#if defined(XNU_NATIVE_AES) && XNU_NATIVE_AES
+++    "   ,{"
+++    "     'IOClass'         = NativeAES;"
+++    "     'IOProviderClass' = IOResources;"
+++    "     'IOResourceMatch' = IOBSD;"
+++    "     'IOProbeScore'    = 1000:32;"
+++    "   }"
+++#endif
+++#if defined(XNU_NATIVE_VIRTIO_BLOCK) && XNU_NATIVE_VIRTIO_BLOCK
+++    "   ,{"
+++    "     'IOClass'         = NativeVirtioBlock;"
+++    "     'IOProviderClass' = IOPlatformDevice;"
+++    "     'IOProbeScore'    = 1000:32;"
+++    "   }"
+++#endif
+++#if defined(XNU_NATIVE_VIRTIO_CONSOLE) && XNU_NATIVE_VIRTIO_CONSOLE
+++    "   ,{"
+++    "     'IOClass'         = NativeVirtioConsole;"
+++    "     'IOProviderClass' = IOPlatformDevice;"
+++    "     'IOProbeScore'    = 1000:32;"
+++    "   }"
+++#endif
+++#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+++    "   ,{"
+++    "     'IOClass'         = NativeRamBlock;"
+++    "     'IOMatchCategory' = NativeRamBlock;"
+++    "     'IOProviderClass' = IOResources;"
+++    "     'IOResourceMatch' = IOBSD;"
+++    "     'IOProbeScore'    = 1000:32;"
+++    "   }"
+++#endif
+++#if defined(XNU_NATIVE_UFS) && XNU_NATIVE_UFS
+++    "   ,{"
+++    "     'IOClass'         = NativeUfs;"
+++    "     'IOProviderClass' = IOPlatformDevice;"
+++    "     'IOProbeScore'    = 1000:32;"
+++    "   }"
+++    "   ,{"
+++    "     'IOClass'         = NativeUfs;"
+++    "     'IOMatchCategory' = NativeUfsRoot;"
+++    "     'IOProviderClass' = IOPlatformExpertDevice;"
+++    "     'IOProbeScore'    = 500:32;"
+++    "   }"
+++#endif
++     ")";
+diff --git a/patches/xnu-8796/skip.txt b/patches/xnu-8796/skip.txt
+new file mode 100644
+index 0000000..7438d07
+--- /dev/null
++++ b/patches/xnu-8796/skip.txt
+@@ -0,0 +1,9 @@
++# Patches of this source line that a board of it must not apply, with the reason.
++
++pgz-aligned-validation: XNU 8796 has no page-guard zones; zone_id_require_aligned does not exist
++public-entitlements-header: the 8796 necp client includes CodeSignature/Entitlements.h, not CoreEntitlements
++published-freezer-condition: the 8796 freezer has no FREEZE_ENABLED_DEFAULT flag to repair
++offline-owner-systemos-mount: the owner chain, cryptex policy and its kern_exec hooks are 10063 only
++zzy-native-gpu-addon-mount: builds on the owner Data mount this line does not have
++zzy-staged-system-apps: builds on the owner Data mount this line does not have
++zzz-boot-progress: the 8796 console has no vc_progress hook and no sleh.c; the boot screen is a 10063 feature
+diff --git a/patches/xnu-8796/source-machine-layer.patch b/patches/xnu-8796/source-machine-layer.patch
+new file mode 100644
+index 0000000..e1317f6
+--- /dev/null
++++ b/patches/xnu-8796/source-machine-layer.patch
+@@ -0,0 +1,43 @@
++diff --git a/config/MASTER b/config/MASTER
++index 07147cb..5ad052f 100644
++--- a/config/MASTER
+++++ b/config/MASTER
++@@ -321,6 +321,10 @@ options   CONFIG_EMBEDDED			# <config_embedded>
++ # Compile XNU with PPL support.
++ options   CONFIG_PMAP_PPL			# <config_pmap_ppl>
++ 
+++# Apple memory/cache controller register layout. Non-Apple SoCs of this line leave it off:
+++# their pmap does not program AMCC, and the AMCC assembly is not linkable there.
+++options   CONFIG_APPLE_AMCC			# <apple_amcc>
+++
++ options   NOS_ARM_ASM			# <nos_arm_asm>
++ options   NOS_ARM_PMAP			# <nos_arm_pmap>
++ 
++diff --git a/config/MASTER.arm64.bcm2837 b/config/MASTER.arm64.bcm2837
++index 1ed75ee..3b2f211 100644
++--- a/config/MASTER.arm64.bcm2837
+++++ b/config/MASTER.arm64.bcm2837
++@@ -16,7 +16,7 @@
++ #  Standard Apple OS Configurations:
++ #  -------- ----- -- ---------------
++ #
++-#  KERNEL_BASE =    [ arm64 config_pmap_ppl xsmall msgb_small config_embedded config_requires_u32_munging ARM_EXTRAS_BASE ]
+++#  KERNEL_BASE =    [ arm64 config_pmap_ppl nos_arm_asm nos_arm_pmap xsmall msgb_small config_embedded config_requires_u32_munging ARM_EXTRAS_BASE ]
++ #  KERNEL_RELEASE = [ KERNEL_BASE ]
++ #  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug ]
++ #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_waitq_stats config_workloop_debug ]
++diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
++index c40d57b..ccccb50 100644
++--- a/osfmk/conf/files.arm64
+++++ b/osfmk/conf/files.arm64
++@@ -25,8 +25,8 @@ osfmk/arm64/WKdmCompress_4k.s	standard
++ osfmk/arm64/WKdmData.s		standard
++ osfmk/arm64/lz4_decode_arm64.s  standard
++ osfmk/arm64/lz4_encode_arm64.s  standard
++-osfmk/arm64/amcc_rorgn_ppl.c optional nos_arm_asm config_pmap_ppl
++-osfmk/arm64/amcc_rorgn_common.c optional nos_arm_asm
+++osfmk/arm64/amcc_rorgn_ppl.c optional nos_arm_asm config_pmap_ppl apple_amcc
+++osfmk/arm64/amcc_rorgn_common.c optional nos_arm_asm apple_amcc
++ osfmk/arm64/bcopy.s standard
++ osfmk/arm64/bzero.s standard
++ osfmk/arm/caches.c		standard
+diff --git a/patches/xnu-8796/zzx-pmap-sync-64bit-pa.patch b/patches/xnu-8796/zzx-pmap-sync-64bit-pa.patch
+new file mode 100644
+index 0000000..57bf593
+--- /dev/null
++++ b/patches/xnu-8796/zzx-pmap-sync-64bit-pa.patch
+@@ -0,0 +1,15 @@
++diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
++index 733c85a..38c8d64 100644
++--- a/osfmk/arm/pmap/pmap.c
+++++ b/osfmk/arm/pmap/pmap.c
++@@ -6887,7 +6887,9 @@ void
++ pmap_sync_page_attributes_phys(
++ 	ppnum_t pp)
++ {
++-	flush_dcache((vm_offset_t) (pp << PAGE_SHIFT), PAGE_SIZE, TRUE);
+++	/* ptoa() widens before the shift: pp << PAGE_SHIFT is a 32-bit shift and drops the high bits of physical
+++	 * addresses at or above 4 GiB (all of DRAM on boards whose memory starts there), which phystokv() then rejects. */
+++	flush_dcache((vm_offset_t) ptoa(pp), PAGE_SIZE, TRUE);
++ }
++ 
++ #if CONFIG_COREDUMP
+diff --git a/scripts/build-xnu-4k-baseline.sh b/scripts/build-xnu-4k-baseline.sh
+index 5815dd9..9c07ddc 100755
+--- a/scripts/build-xnu-4k-baseline.sh
++++ b/scripts/build-xnu-4k-baseline.sh
+@@ -31,22 +31,85 @@ if [ ! -x .cache/fakeroot/usr/local/libexec/availability.pl ]; then
+     OBJROOT="$ROOT/build/availability" SYMROOT="$ROOT/build/availability" \
+     DSTROOT="$ROOT/.cache/fakeroot" CMAKE="$(command -v cmake)" NINJA="$(command -v ninja)"
+ fi
++# The patches are written for a source line: the XNU version feeds.toml pins. A line whose
++# structure differs carries an overlay in patches/xnu-<major>/. A patch of the same name there
++# replaces the base patch, and skip.txt names base patches the line does not have, with the
++# reason. Nothing is skipped silently: every omission is printed and checked below.
++XNU_PATCH_LINE="xnu-${XNU_VERSION%%.*}"
++XNU_PATCH_OVERLAY="$ROOT/patches/$XNU_PATCH_LINE"
++patch_skipped() {
++  local name=$1 reason
++  [ -f "$XNU_PATCH_OVERLAY/skip.txt" ] || return 1
++  reason=$(awk -F: -v n="$name" '$1 ~ "^[[:space:]]*" n "[[:space:]]*$" { sub(/^[^:]*:[[:space:]]*/, ""); print; exit }' "$XNU_PATCH_OVERLAY/skip.txt")
++  [ -n "$reason" ] || return 1
++  echo "skip $name: $reason"
++  return 0
++}
++effective_patch() {
++  local name
++  name=$(basename "$1" .patch)
++  if [ -f "$XNU_PATCH_OVERLAY/$name.patch" ]; then
++    echo "$XNU_PATCH_OVERLAY/$name.patch"
++  else
++    echo "$1"
++  fi
++}
++apply_patch() {
++  local patch
++  patch=$(effective_patch "$1")
++  if git -C .cache/xnu-work apply --reverse --check "$patch" >/dev/null 2>&1; then
++    return 0
++  fi
++  git -C .cache/xnu-work apply --check "$patch"
++  git -C .cache/xnu-work apply "$patch"
++}
+ # The optional observation hooks overlap existing root/exec patch context.
+ # Remove them first so earlier independent patches retain their idempotent checks.
+ # The same holds for the boot-time GPU addon mount and the staged system apps copy (zzy), which edit the owner Data mount function
+ # inside the systemos patch. Reverse newest first; the loop below re-applies them in name order.
+ for LATE_PATCH in "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-staged-system-apps.patch" \
+     "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
++  patch_skipped "$(basename "$LATE_PATCH" .patch)" && continue
++  LATE_PATCH=$(effective_patch "$LATE_PATCH")
+   if git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
+     git -C .cache/xnu-work apply --reverse "$LATE_PATCH"
+   fi
+ done
+-for PATCH in "$ROOT"/patches/xnu/*.patch "$ROOT"/kits/NativePrelink/patches/*.patch; do
+-  if ! git -C .cache/xnu-work apply --reverse --check "$PATCH" >/dev/null 2>&1; then
+-    git -C .cache/xnu-work apply --check "$PATCH"
+-    git -C .cache/xnu-work apply "$PATCH"
+-  fi
++for PATCH in "$ROOT"/patches/xnu/*.patch; do
++  patch_skipped "$(basename "$PATCH" .patch)" && continue
++  apply_patch "$PATCH"
++done
++# Overlay patches without a base counterpart add to the line.
++for PATCH in "$XNU_PATCH_OVERLAY"/*.patch; do
++  [ -e "$PATCH" ] || continue
++  [ -e "$ROOT/patches/xnu/$(basename "$PATCH")" ] && continue
++  apply_patch "$PATCH"
++done
++# The prelink kit patches are named for the version they patch; another line does not take them.
++for PATCH in "$ROOT"/kits/NativePrelink/patches/*.patch; do
++  [ -e "$PATCH" ] || continue
++  case "$(basename "$PATCH")" in
++    xnu-*)
++      case "$(basename "$PATCH")" in
++        "xnu-$XNU_VERSION-"*) ;;
++        *) echo "skip $(basename "$PATCH"): other source line"; continue ;;
++      esac
++      ;;
++  esac
++  apply_patch "$PATCH"
+ done
++# A skip list that names a patch the base tree no longer has would hide a lost patch.
++if [ -f "$XNU_PATCH_OVERLAY/skip.txt" ]; then
++  while IFS=: read -r NAME REASON; do
++    case "$NAME" in ''|'#'*) continue ;; esac
++    NAME=${NAME//[[:space:]]/}
++    [ -n "$NAME" ] || continue
++    if [ ! -f "$ROOT/patches/xnu/$NAME.patch" ]; then
++      echo "error: $XNU_PATCH_OVERLAY/skip.txt skips $NAME, which patches/xnu/ does not have" >&2
++      exit 1
++    fi
++  done < "$XNU_PATCH_OVERLAY/skip.txt"
++fi
+ export XNU_AVAILABILITY_PL=$ROOT/.cache/fakeroot/usr/local/libexec/availability.pl
+ python3 scripts/prepare-xnu-source.py
+ # The first pass of a new tree (XNU_BOOTSTRAP=1, set by the unixnu driver) only has to leave the compile records and

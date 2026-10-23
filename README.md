@@ -334,6 +334,12 @@ not have either, so this repository carries
 | `payload` | `ubuntu-latest` | manual, `target=payload` (the default) | installs clang, lld and the EDK II host tools, clones Mu_Basecore, builds `UniXNU.efi` and `DarwinBoot.efi`, stages `out/payload` and checks it |
 | `kernel` | `macos-latest` | manual, `target=kernel` | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, and links |
 
+UniXNU's 16.x support travels as `ci/unixnu-16x.patch`: the overlay and the per-line patch
+selection belong in UniXNU, but this account cannot push to `UniXNU/UniXNU`. Both CI jobs
+apply the shim to their checkout and treat an already-applied shim as a no-op, so the moment
+the change is upstream the shim can be deleted without touching the jobs. The build driver
+still comes from UniXNU `main`; only the patch selection and its overlay are carried.
+
 The `kernel` job compiles and links the 16.x source line, then stops at the prelink gate
 because the board has no `[kernel.prelink]` (there is no kernel image yet to merge with the
 IPSW kernelcache). That one stop is tolerated and every other failure fails the job, so the

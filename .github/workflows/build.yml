@@ -46,6 +46,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Carry the 16.x line into the base checkout
+        # The 8796 overlay and the per-line patch selection live in UniXNU, but this account
+        # cannot push there. ci/unixnu-16x.patch carries that change until it is upstream; a
+        # checkout that already has it makes the shim a no-op.
+        run: |
+          if git -C unixnu apply --reverse --check ci/unixnu-16x.patch >/dev/null 2>&1; then
+            echo "already in the base checkout; not applying the shim"
+          else
+            git -C unixnu apply ci/unixnu-16x.patch
+          fi
+
       - name: Parse board.toml and the defconfig
         run: |
           python3 - <<'PY'
@@ -238,6 +249,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Carry the 16.x line into the base checkout
+        # Same shim as the validate job: the 8796 overlay and the per-line patch selection
+        # until they are in UniXNU itself.
+        run: |
+          if git -C unixnu apply --reverse --check ci/unixnu-16x.patch >/dev/null 2>&1; then
+            echo "already in the base checkout; not applying the shim"
+          else
+            git -C unixnu apply ci/unixnu-16x.patch
+          fi
 
       - name: Report the runner toolchain
         run: |
