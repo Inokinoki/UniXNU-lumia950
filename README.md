@@ -160,8 +160,11 @@ pins the kernelcache hash.
 The 16.x kernel builds and links. Run
 [39890935817](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39890935817)
 compiled all five components, wrote the compile records, built all six archives, and linked
-`mach.development.bcm2837` with `NativeSdhci` and the display stub force-loaded. Its only
-stop is the board's missing `[kernel.prelink]`, which the workflow tolerates by name. Six
+`mach.development.bcm2837` with `NativeSdhci` and the display stub force-loaded. The image
+is a 14,840,680-byte ARM64 `MH_EXECUTE` with 25 load commands
+(sha256 `bdf3a3ec171b8304d57fda56b05d9c51573dc56f6644b4d9849332e6be2bf06c`) and ships in the
+job's artifact. Its only stop is the board's missing `[kernel.prelink]`, which the workflow
+tolerates by name. Six
 stops stood in front of that, one per addition above: the annotated tag pinned as a commit,
 the clang flag this line passes and the runner's clang rejects, the aligned-char uio stack
 buffer, the `iig`-generated DriverKit dispatch, the omitted `osfmk/arm64/kpc.c`, the missing

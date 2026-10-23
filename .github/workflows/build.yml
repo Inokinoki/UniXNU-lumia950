@@ -348,7 +348,8 @@ jobs:
         with:
           name: lumia950-native-sdhci
           path: |
-            out/*/tree/build/xnu/ios-obj/*/mach.*
+            out/*/tree/build/xnu/ios-obj/*/mach.development.bcm2837
+            out/*/tree/build/xnu/ios-obj/*/mach.development.bcm2837.unstripped
             out/*/tree/build/native-sdhci/**
             out/*/tree/build/native-legacy-display/**
             out/*/logs/**
