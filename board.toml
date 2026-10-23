@@ -55,13 +55,14 @@ board_id = 14
 # name their inputs.
 fetch = ["KernelCache"]
 
-# TODO: [kernel.prelink] returns when a 16.x kernel image exists to merge with this
-#       kernelcache. The source line is settled: feeds.toml pins xnu-8796.141.3 and
-#       patches/xnu-8796/ adapts the patch set to it — 47 base patches unchanged, 5 replaced
-#       by their 8796 form, 6 added for this line, 7 skipped with a stated reason, and
-#       NativePrelink's kit patches
-#       gated by their file name. What is missing is the image itself: the kernel job has to
-#       compile and link the 16.x tree and leave the file this section names.
+# TODO: [kernel.prelink] returns when NativePrelink takes the 16.x line and the kernelcache
+#       hash is pinned. The source line is settled and the kernel image builds: feeds.toml pins
+#       xnu-8796.141.3 and patches/xnu-8796/ adapts the patch set to it — 47 base patches
+#       unchanged, 5 replaced by their 8796 form, 6 added for this line, 7 skipped with a
+#       stated reason, and NativePrelink's kit patches gated by their file name, which is why
+#       8796 takes none of them. The image the kernel job links is in its artifact under
+#       out/<device>/tree/build/xnu/ios-obj/mach.development.bcm2837; what is missing is the
+#       merge step for this line.
 
 # [firmware] stays absent on purpose. The route is chainload: the phone's own UEFI
 # (Lumia950XLPkg) starts \EFI\UniXNU\UniXNU.efi from EFIESP, so this repository builds no

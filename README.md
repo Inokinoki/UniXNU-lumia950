@@ -127,11 +127,11 @@ is referenced even with the display provider unselected. `drivers/NativeLegacyDi
 defines both probe entry points and does nothing else — no framebuffer, no provider — and
 the defconfig force-loads it through the kernel script's `XNU_EXTRA_LD_ARCHIVES` hook.
 
-Prelink is paused for a missing image, not a version. The source pin is now the 16.x tree,
-but the board has no built kernel and no `[kernel.prelink]`, so there is nothing to merge
-with the kexts of the 16.7.16 kernelcache yet. The candidate produced while the pin was
-17.x (12 components) answered the tool and not the requirement: those kexts belong to a
-different XNU ABI.
+Prelink is paused on the merge tool, not on the kernel. The 16.x kernel builds and links in
+CI, but NativePrelink's kit patches are named for `xnu-10063.141.1`, so nothing merges it
+with the kexts of the 16.7.16 kernelcache yet, and the board does not pin that kernelcache's
+hash. The candidate produced while the pin was 17.x (12 components) answered the tool and
+not the requirement: those kexts belong to a different XNU ABI.
 
 The kernel is on 16.x now. `feeds.toml` pins `xnu-8796.141.3` — a source of the same name
 replaces the base repository's 17.x entry — and `patches/xnu-8796/` is that line's overlay.
@@ -154,18 +154,20 @@ has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, n
 exclave owner chain, no boot-progress console. NativePrelink's kit patches carry their
 line in the file name, so 8796 does not take them. The build prints every skip and refuses
 a skip list that names a patch the base tree no longer has, so an omission cannot become a
-silent hole. `[kernel.prelink]` stays out until a 16.x kernel image exists to merge.
+silent hole. `[kernel.prelink]` stays out until NativePrelink takes this line and the board
+pins the kernelcache hash.
 
-The 16.x kernel now compiles. All five components build, and the bootstrap pass reaches the
-link, where it stops on `native_legacy_display_probe` — the one symbol whose archive is
-built after that pass, which is exactly what the pass is for. The archives then build, and
-the real pass links with them until the debug pmap's `pmap_pending_preemption`
-(`pmap-pending-preemption`). Five stops stood in front of that and are recorded above: the
-aligned-char uio stack buffer (`clang-uio-stackbuf`), the `iig`-generated DriverKit dispatch
-(`driverkit-rpc-kernel-content`), the omitted `osfmk/arm64/kpc.c` (`restore-arm64-kpc`), the
-missing compile records (`compile-records`) and the unpublished debug pmap hook. A failed
-run hands over `out/<device>/logs/`: the step uploads it and greps for `error:` because the
-driver echoes only the last thirty lines of a command.
+The 16.x kernel builds and links. Run
+[39890935817](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39890935817)
+compiled all five components, wrote the compile records, built all six archives, and linked
+`mach.development.bcm2837` with `NativeSdhci` and the display stub force-loaded. Its only
+stop is the board's missing `[kernel.prelink]`, which the workflow tolerates by name. Six
+stops stood in front of that, one per addition above: the annotated tag pinned as a commit,
+the clang flag this line passes and the runner's clang rejects, the aligned-char uio stack
+buffer, the `iig`-generated DriverKit dispatch, the omitted `osfmk/arm64/kpc.c`, the missing
+compile records and the unpublished debug pmap hook. A failed run hands over
+`out/<device>/logs/`: the step uploads it and greps for `error:` because the driver echoes
+only the last thirty lines of a command.
 
 ## The reference image
 
@@ -363,10 +365,11 @@ the change is upstream the shim can be deleted without touching the jobs. The bu
 still comes from UniXNU `main`; only the patch selection and its overlay are carried.
 
 The `kernel` job compiles and links the 16.x source line, then stops at the prelink gate
-because the board has no `[kernel.prelink]` (there is no kernel image yet to merge with the
-IPSW kernelcache). That one stop is tolerated and every other failure fails the job, so the
-archive and the link stay verified. When the kernel exists, the prelink section and its pin
-return and the gate goes away.
+because the board has no `[kernel.prelink]`. That one stop is tolerated and every other
+failure fails the job, so the archives, the link and the kernel image stay verified. The
+image travels in the job's artifact beside the archives and their logs. When NativePrelink
+takes this line and the board pins the kernelcache hash, the prelink section returns and the
+gate goes away.
 
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.

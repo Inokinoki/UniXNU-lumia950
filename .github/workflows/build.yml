@@ -292,10 +292,10 @@ jobs:
 
       - name: Build the kernel and the device archives
         # feeds.toml pins the 16.x tree, so the compile is the right source line for this
-        # 16.7.16 image. There is no [kernel.prelink] because there is no built kernel to
-        # merge with the kernelcache yet. The kernel step therefore compiles, builds the
-        # archives and links, then stops at the prelink gate. That one stop is tolerated;
-        # every other failure fails the job.
+        # 16.7.16 image. There is no [kernel.prelink] because NativePrelink's patches are
+        # written for 10063 and no tool takes the 8796 kernel yet. The kernel step therefore
+        # compiles, builds the archives and links, then stops at the prelink gate. That one
+        # stop is tolerated; every other failure fails the job.
         run: |
           set +e
           cd unixnu
@@ -348,6 +348,7 @@ jobs:
         with:
           name: lumia950-native-sdhci
           path: |
+            out/*/tree/build/xnu/ios-obj/*/mach.*
             out/*/tree/build/native-sdhci/**
             out/*/tree/build/native-legacy-display/**
             out/*/logs/**
