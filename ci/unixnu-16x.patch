@@ -650,16 +650,16 @@ index 0000000..21e8875
 +     ")";
 diff --git a/patches/xnu-8796/restore-arm64-kpc.patch b/patches/xnu-8796/restore-arm64-kpc.patch
 new file mode 100644
-index 0000000..2805fc4
+index 0000000..178f26e
 --- /dev/null
 +++ b/patches/xnu-8796/restore-arm64-kpc.patch
-@@ -0,0 +1,1136 @@
+@@ -0,0 +1,1139 @@
 +diff --git a/osfmk/arm64/kpc.c b/osfmk/arm64/kpc.c
 +new file mode 100644
-+index 0000000..1816306
++index 0000000..f6e64cc
 +--- /dev/null
 ++++ b/osfmk/arm64/kpc.c
-+@@ -0,0 +1,1130 @@
++@@ -0,0 +1,1133 @@
 ++/*
 ++ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
 ++ *
@@ -703,7 +703,10 @@ index 0000000..2805fc4
 ++#include <kern/monotonic.h>
 ++#include <mach/mach_types.h>
 ++#include <machine/machine_routines.h>
+++/* cpc.h arrives with a later source line; this one has no CPC support. */
+++#if __has_include(<kern/cpc.h>)
 ++#include <kern/cpc.h>
+++#endif
 ++#include <stdint.h>
 ++#include <sys/errno.h>
 ++
