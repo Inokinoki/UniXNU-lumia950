@@ -137,14 +137,23 @@ The kernel is on 16.x now. `feeds.toml` pins `xnu-8796.141.3` — a source of th
 replaces the base repository's 17.x entry — and `patches/xnu-8796/` is that line's overlay.
 Of the 54 base patches, 47 apply unchanged; five are replaced by their 8796 form (the
 non-Apple tunables guards, the external archive hook, the machine layer, the native AES
-personalities and the 64-bit physical address shift); one is added because 16.x passes a
-clang flag the runner's clang no longer knows; and `skip.txt` names the seven this line
+personalities and the 64-bit physical address shift); two are added: `clang-trivial-auto-var-init`,
+because 16.x passes a clang flag the runner's clang no longer knows, and `clang-uio-stackbuf`,
+which declares the uio stack buffer the way later XNU lines do — current clang rejects an array
+of a one-byte type carrying an eight-byte alignment, which is what every `bsd/` call site used
+to say; and `skip.txt` names the seven this line
 has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, no
 exclave owner chain, no boot-progress console. NativePrelink's kit patches carry their
 line in the file name, so 8796 does not take them. The build prints every skip and refuses
 a skip list that names a patch the base tree no longer has, so an omission cannot become a
-silent hole. `[kernel.prelink]` stays out until a 16.x kernel image exists to merge, so the
-kernel job still stops at the prelink gate — now after compiling the right source line.
+silent hole. `[kernel.prelink]` stays out until a 16.x kernel image exists to merge.
+
+The first 16.x compile stops in `bsd/`, not at the gate. The patch set applies and the
+bootstrap pass compiles for about three minutes before the first error, so the job fails with
+`out/<device>/logs/kernel-bootstrap.log` in its artifact — the log the step now uploads and
+greps for `error:` on a failure, because the driver echoes only the last thirty lines of a
+command. What that log first reported, an aligned-char uio stack buffer, is the
+`clang-uio-stackbuf` addition above.
 
 ## The reference image
 
