@@ -51,10 +51,10 @@ jobs:
         # cannot push there. ci/unixnu-16x.patch carries that change until it is upstream; a
         # checkout that already has it makes the shim a no-op.
         run: |
-          if git -C unixnu apply --reverse --check ci/unixnu-16x.patch >/dev/null 2>&1; then
+          if git -C unixnu apply --reverse --check "$GITHUB_WORKSPACE/ci/unixnu-16x.patch" >/dev/null 2>&1; then
             echo "already in the base checkout; not applying the shim"
           else
-            git -C unixnu apply ci/unixnu-16x.patch
+            git -C unixnu apply "$GITHUB_WORKSPACE/ci/unixnu-16x.patch"
           fi
 
       - name: Parse board.toml and the defconfig
@@ -254,10 +254,10 @@ jobs:
         # Same shim as the validate job: the 8796 overlay and the per-line patch selection
         # until they are in UniXNU itself.
         run: |
-          if git -C unixnu apply --reverse --check ci/unixnu-16x.patch >/dev/null 2>&1; then
+          if git -C unixnu apply --reverse --check "$GITHUB_WORKSPACE/ci/unixnu-16x.patch" >/dev/null 2>&1; then
             echo "already in the base checkout; not applying the shim"
           else
-            git -C unixnu apply ci/unixnu-16x.patch
+            git -C unixnu apply "$GITHUB_WORKSPACE/ci/unixnu-16x.patch"
           fi
 
       - name: Report the runner toolchain
