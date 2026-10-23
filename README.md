@@ -21,7 +21,9 @@ therefore plain files on that partition, launched from that menu:
 | --- | --- | --- |
 | `\EFI\UniXNU\UniXNU.efi` | the menu | `package/build.sh` in the UniXNU checkout |
 | `\EFI\UniXNU\unixnu.toml` | its configuration | [payload/EFI/UniXNU/unixnu.toml](payload/EFI/UniXNU/unixnu.toml) |
-| `\EFI\UniXNU\Drivers\DarwinBoot.efi` | the loader, named in the config only once a kernel exists | `DarwinBootPkg/DarwinBoot.dsc` |
+| `\EFI\UniXNU\Drivers\DarwinBoot.efi` | the loader, named in the config by the kernel stage | `DarwinBootPkg/DarwinBoot.dsc` |
+| `\EFI\UniXNU\Payloads\kernel.macho` | the kernel, from the kernel job's artifact | `scripts/stage-kernel.py` |
+| `\EFI\UniXNU\Payloads\kernel.macho.adt` | the device tree DarwinBoot hands the kernel | `scripts/make-lumia950-adt.py`, through the same script |
 
 Mu-Silicium is not the base: it has no MSM8992 target, and its installation model is an
 Android boot image that an Android bootloader loads with `fastboot`, which a Lumia does not
@@ -39,6 +41,40 @@ UniXNU's menu reads `ConIn`; touch arrives as an absolute pointer, which the men
 consume. That the firmware publishes the buttons as a text input device is measured now,
 not assumed.
 
+### Stage two: the kernel
+
+The menu stage proves the firmware services; the kernel stage adds the loader and a kernel to
+the same tree. It is a separate command so the menu keeps working when the kernel does not:
+
+```sh
+bash scripts/build-payload.sh                    # the menu, in out/payload
+python3 scripts/stage-kernel.py --kernel kernel.macho --unique-chip-id HEX \
+    --menu-tree out/payload --out build/boot      # the same tree, with a kernel in it
+```
+
+`--kernel` takes the prelinked image from the `lumia950-kernel` artifact
+(`out/lumia950/kernel/kernel.macho`), not the `mach.development.bcm2837` beside it: the merged
+image is the one with the kernelcache's kexts in it.
+
+`stage-kernel.py` does four things, and checks each before anything is copied to the phone: it
+requires a 64-bit ARM `MH_EXECUTE` kernel (what DarwinBoot parses), runs
+`scripts/make-lumia950-adt.py` with the values in `[payload]` and `[payload.adt]`, writes the
+`.adt` sidecar DarwinBoot reads as `<kernel>.adt`, and inserts the `[[driver]]` and `xnu` entry
+into the staged copy of `unixnu.toml` — the same file, so the panel layout and the action
+entries cannot drift between the two stages. Then `check-adt.py` and `check-payload.py` re-read
+what it wrote; the second also refuses a tree that names a kernel without its `.adt` sidecar,
+a failure that would otherwise be `EFI_NOT_FOUND` on the panel.
+
+One assumption is settled by the first flash, not by anything in this repository: DarwinBoot
+starts the kernel only when the firmware runs at **EL1** (`DarwinCurrentEl () == 4`). If the
+Lumia's UEFI hands control over at EL2, the loader prints `unsupported inputs or exception
+level; firmware retained` on the panel and returns to the menu — a visible, harmless failure
+that names its own cause. Nothing here is built around it until the phone says which it is.
+
+The native kernel is 14.8 MB and the prelinked image is larger still, while EFIESP is a small
+partition; the stager prints the tree's size, and the microSD card carries the same tree when
+EFIESP cannot.
+
 ### Testing it on the phone
 
 Nothing in the Lumia firmware runs an application from `\EFI\UniXNU` by name. It boots the
@@ -51,7 +87,8 @@ payload is staged with the menu under both names:
 | --- | --- |
 | `\EFI\BOOT\BOOTAA64.EFI` | `EFI/BOOT/BOOTAA64.EFI` — the same `UniXNU.efi` |
 | `\EFI\UniXNU\unixnu.toml` | `EFI/UniXNU/unixnu.toml` |
-| `\EFI\UniXNU\Drivers\DarwinBoot.efi` | not loaded until a kernel entry exists |
+| `\EFI\UniXNU\Drivers\DarwinBoot.efi` | the loader, present from the menu stage on |
+| `\EFI\UniXNU\Payloads\kernel.macho` and its `.adt` | only in the kernel stage's tree |
 
 Unlocking with WPInternals and installing the Lumia950XLPkg UEFI (`UEFI.elf` in the EFIESP
 root, the Boot Shim application, a BCD entry for it) come first and are not in this
@@ -66,9 +103,12 @@ what actually boots it, and pointing it back at the mobile-startup GUID
 1. Mount EFIESP in Mass Storage Mode and back up `\EFI\BOOT`. Windows Phone's own loader is
    ARM32 (`BOOTARM.EFI`), so `BOOTAA64.EFI` is usually free — but if one is already there it
    is somebody else's fallback loader, so rename it rather than overwriting it.
-2. Copy `out/payload/EFI` over `\EFI`. Nothing else on the partition changes.
-3. Reboot and leave the splash alone. Expect the UniXNU menu for 20 s; "Exit to firmware"
-   then opens the firmware's own menu, the one with System Info.
+2. Copy `out/payload/EFI` over `\EFI` (menu stage), or `build/boot/EFI` (kernel stage,
+   which is the same tree plus `Payloads/` and the driver entry). Nothing else on the
+   partition changes.
+3. Reboot and leave the splash alone. Expect the UniXNU menu for 20 s; in the kernel stage
+   the countdown selects `iOS 16.7.16`, in the menu stage "Exit to firmware" opens the
+   firmware's own menu, the one with System Info.
 4. To go back to Windows, mount EFIESP again and delete `\EFI\BOOT\BOOTAA64.EFI`. While it
    is there, that file is what the firmware starts.
 
@@ -78,6 +118,9 @@ What each outcome means:
 | --- | --- |
 | no menu, the firmware menu appears after a few seconds | the image did not load: check the copy is 95232 bytes and AArch64 |
 | text console instead of cards | GOP is present but the graphics path is not; see `[ui] console` |
+| `DARWINBOOT: unsupported inputs or exception level; firmware retained` | the firmware runs at EL2, not EL1, or the entry passed inputs the loader refuses (read the line: it names which) |
+| `DARWINBOOT:` names a file or `EFI_COMPROMISED_DATA` | the `Payloads` tree is incomplete: the kernel, its `.adt` sidecar and the placeholders in the ADT have to match what the config hands over |
+| screen stays black after the entry, phone resets a few seconds later | the kernel started and stopped; nothing can be drawn after `ExitBootServices` yet (blocker 3), so this is the expected blind rung, and the reset is the watchdog |
 | menu draws, `Restart` / `Power off` do nothing | MSM8992 has no PSCI SYSTEM_RESET or SYSTEM_OFF; those entries call the firmware's `ResetSystem` |
 | menu draws, `Restart` or `Power off` does nothing | the firmware's `ResetSystem` for that action is a stub |
 
@@ -93,11 +136,11 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | UEFI firmware | not built here; the phone's own Lumia950XLPkg was observed starting `\EFI\BOOT\BOOTAA64.EFI` |
 | Chainload payload | built by the `payload` job ([run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766)), artifact `lumia950-payload`; loaded on the phone on 2026-10-23 through the BCD `bootsequence` entry |
 | UniXNU menu | drawn on the 1440x2560 panel in the portrait card layout, three action entries, volume keys move the selection; touch is not consumed |
-| DarwinBoot | `DarwinBoot.efi` builds standalone from its DSC; not yet loaded |
+| DarwinBoot | `DarwinBoot.efi` builds standalone from its DSC and `scripts/stage-kernel.py` names it in the staged config; not yet loaded |
 | ADT | generated and checked on the host (11976 B, six CPUs, NVRAM proxy); not yet handed to a kernel |
 | XNU kernel | compiles and links on 16.x (14,840,992 B, ARM64 `MH_EXECUTE`, sha256 `8b8c633d…`), merged with the 16.7.16 kexts; not loaded |
-| Prelinked kernel | merged by the kernel job: 9 components, 12,882 rebindings, a sparse prelink index; the tool marks it unqualified and it has not run |
-| XNU entry | the GICv2 interrupt path exists, accepts the ADT's `qcom,msm-qgic2` node and boots under QEMU (see "The interrupt controller"); the phone still needs a loader platform for a loader-built tree, and a display driver |
+| Prelinked kernel | merged by the kernel job: 9 components, 12,882 rebindings, a sparse prelink index; the tool marks it unqualified and it has not run. The kernel stage takes that image without changing it |
+| XNU entry | the GICv2 interrupt path exists, accepts the ADT's `qcom,msm-qgic2` node and boots under QEMU (see "The interrupt controller"); the phone stages a kernel, its ADT sidecar and the loader entry with `scripts/stage-kernel.py`, so the first flash waits on EL1 and on a display driver |
 | Storage driver | written, host-tested, never run on hardware |
 | Root volume and userland | not started |
 
@@ -113,6 +156,7 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | Chainload payload configuration | `python3 scripts/check-payload.py` | accepted; the keys and enums are the ones `UniXNULib/Config.c` reads |
 | Payload staging | `stage-esp.py` and `check-payload.py --payload-dir` on fixture EFI files | tree staged at `EFI/UniXNU` and accepted |
 | Chainload payload build | `payload` job, [run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766) | `UniXNU.efi` and `BOOTAA64.EFI` 95232 B, `DarwinBoot.efi` 26112 B, config 2119 B; staged tree checked, artifact uploaded |
+| Kernel stage | `python3 scripts/stage-kernel.py --kernel <mach-o> --unique-chip-id … --menu-tree out/payload` | ADT generated (11,932 B, six CPUs) and accepted by `check-adt.py`; config re-read with 4 entries, the kernel first and `default = "xnu"`; a non-`MH_EXECUTE` kernel and a tree missing the `.adt` sidecar are both refused |
 | On-phone chainload | mass-storage copy of `out/payload/EFI`, BCD `bootsequence` pointed at the `\EFI\boot\BootShim.efi` entry | Lumia splash then the UniXNU menu with three cards; volume keys move the selection (2026-10-23) |
 | ADT generator and checker | `python3 scripts/make-lumia950-adt.py --dram-size 0xC0000000 --unique-chip-id ... --chip-id 0x8015` then `python3 scripts/check-adt.py build/lumia950.adt` | 11976-byte tree with 6 CPUs accepted; the checker's `--self-test` rejects 7 deliberate defects, including a broken NVRAM Adler-32 |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
@@ -411,9 +455,11 @@ already in the ADT generator above, so the entry is a table row, not a driver.
    `GICD_ITARGETSR` accordingly. It boots QEMU with `-M virt,gic-version=2` to the lock screen
    and still boots it with `gic-version=3`, and it reads the controller out of the whole
    `compatible` list, so the `qcom,msm-qgic2` node this repository's ADT generator writes is
-   one it accepts; see "The interrupt controller (GICv2)". What is left is a loader platform
-   entry for a tree the HackiOS loader builds itself, and, as above, a display driver before
-   anything can be seen.
+   one it accepts; see "The interrupt controller (GICv2)". What is left is a display driver
+   before anything can be seen, and — on the phone — the loader's EL1 requirement, which the
+   first flash either satisfies or reports (see "Stage two: the kernel"). The HackiOS
+   loader's own synthesized tree would still need an MSM8992 platform entry, but the phone
+   does not use that loader.
 3. **Display has no native driver.** Lumia950XLPkg says its framebuffer depends on the stock
    Qualcomm UEFI and that MDP is not fully implemented, so after `ExitBootServices` there is
    no output unless an MSM8992 MDSS driver exists. With no serial console either, this is the

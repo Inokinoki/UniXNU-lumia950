@@ -101,15 +101,33 @@ roots = [
 # base either: it has no MSM8992 target and its delivery model is an Android boot image for
 # `fastboot boot`, which a Lumia does not have. See README.md, "The boot route".
 
-# TODO: [payload] and [payload.adt], the driver's ramdisk payload for a boot image. The
-#       chainload tree in payload/ is a different thing: files on EFIESP, staged by
-#       scripts/build-payload.sh. When the kernel line opens, the two converge on the same
-#       \EFI\UniXNU\Payloads layout, and this section names what the ADT generator emits.
-#
-#       The ADT generator exists: scripts/make-lumia950-adt.py, checked by scripts/check-adt.py
-#       (the validate job runs both, including its defect self-test). It emits the Apple node
-#       encoding with this SoC's addresses, a /chosen NVRAM proxy, the memory-map placeholders
-#       and the identity properties; README.md carries the node spec.
-#       What is still missing is the section itself: [payload] needs dram_size from the
-#       firmware's memory map, not the 3 GiB marketing figure, because reserved regions carve
-#       into it, and it needs a kernel to place next to the ADT.
+# The kernel stage: the values scripts/stage-kernel.py reads when it puts a kernel beside the
+# menu in the chainload tree. This board never goes through `unixnu payload` or `unixnu bootimg`
+# — a Lumia has no Android boot image — so the boot-image keys (size_mib, volume) stay unused,
+# and the tree is copied onto EFIESP or the microSD card as files.
+[payload]
+title = "iOS 16.7.16"
+# One verbose line. DarwinBoot copies it into boot_args unchanged and refuses more than 1000
+# bytes; `--args` replaces it for one staging run without editing this file.
+kernel_args = ["-v"]
+# 3 GiB: the figure the ADT generator and its checker were exercised with in CI, not a
+# measurement from this phone. The firmware's own memory map still has to be read on the
+# handset — reserved regions carve into the DRAM the OS may own — so treat this as the first
+# value to confirm on hardware, not as a claim about the device.
+dram_size = 0xC0000000
+# The menu's countdown stays in payload/EFI/UniXNU/unixnu.toml, where the panel stage already
+# has it, so there is one place to change it. A staged tree makes the kernel the default
+# entry, so a boot test needs no key press.
+[payload.adt]
+# The Apple flattened encoding with this SoC's addresses, a /chosen NVRAM proxy and the
+# memory-map placeholders DarwinBoot fills in (`/chosen/memory-map/{RAMDisk,PackedRAMDisk,
+# TrustCache}`). The validate job runs the generator and the checker, including the checker's
+# defect self-test.
+tool = "scripts/make-lumia950-adt.py"
+# The generator's default list: two cores in cluster 0, four in cluster 1, boot CPU first. A
+# phone that reports a different boot core is a one-line change here, not a driver change.
+cpu_regs = "0,1,0x100,0x101,0x102,0x103"
+# PSCI on 8992/8994 is conveyed over HVC and it is incomplete: no SYSTEM_OFF and no
+# SYSTEM_RESET, which is why the menu's two power actions are firmware ResetSystem calls.
+psci_method = "hvc"
+chip_id = 0x8015

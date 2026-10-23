@@ -30,20 +30,11 @@ console = "auto"
 [kits]
 autoload = false
 
-# Stage 2, once the kernel line is open and DarwinBoot is staged at
-# \EFI\UniXNU\Drivers\DarwinBoot.efi. The driver registers the loader protocol; the entry
-# below hands it the kernel, the .adt sidecar and the boot arguments.
-#
-# [[driver]]
-# path = "Drivers/DarwinBoot.efi"
-# connect = true
-#
-# [[entry]]
-# id = "xnu"
-# title = "iOS 16.7.16"
-# type = "xnu"
-# path = "Payloads/kernel.macho"
-# args = "-v"
+# Stage 2, the kernel: scripts/stage-kernel.py replaces the marker line below with the
+# DarwinBoot driver and the xnu entry, stages Payloads/kernel.macho with its .adt sidecar,
+# and makes that entry the countdown default. This file stays the source of truth for both
+# stages, so the panel layout and the action entries cannot drift between them.
+# stage-kernel.py: kernel entry
 
 # A loaded configuration replaces the built-in menu, and with it the built-in Restart and
 # Power off entries, so they are repeated here. Both are firmware ResetSystem calls; the

@@ -133,13 +133,28 @@ jobs:
       - name: Check the build scripts
         run: |
           python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py scripts/check-payload.py \
-              scripts/make-lumia950-adt.py scripts/check-adt.py
+              scripts/make-lumia950-adt.py scripts/check-adt.py scripts/stage-kernel.py
           bash -n scripts/build-payload.sh
 
       - name: Check the chainload payload configuration
         # The keys and enums are the ones UniXNULib/Config.c reads, so a typo fails here
         # rather than as an error line on a phone screen.
         run: python3 scripts/check-payload.py
+
+      - name: The kernel stage composes with the menu stage
+        # The marker the stager replaces lives in the menu configuration, and the tree it adds
+        # to must carry the loader. If either drifts, this has to fail here rather than on a
+        # phone that boots a menu with no kernel behind it.
+        run: |
+          mkdir -p build
+          python3 -c "import struct,pathlib;p=pathlib.Path('build/ci-kernel.macho');p.write_bytes(struct.pack('<IIIIIIII',0xfeedfacf,0x0100000c,0,2,1,8,0,0)+b'\\0'*8)"
+          cp -r payload build/menu
+          mkdir -p build/menu/EFI/UniXNU/Drivers
+          : > build/menu/EFI/UniXNU/Drivers/DarwinBoot.efi
+          python3 scripts/stage-kernel.py --kernel build/ci-kernel.macho \
+              --unique-chip-id 1122334455667788 --menu-tree build/menu --out build/boot
+          grep -q 'default = "xnu"' build/boot/EFI/UniXNU/unixnu.toml
+          test -s build/boot/EFI/UniXNU/Payloads/kernel.macho.adt
 
       - name: The ADT generator and its checker
         # DarwinBoot hands this tree to XNU. The checker parses it with the encoding XNU reads,

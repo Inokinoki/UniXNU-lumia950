@@ -231,6 +231,11 @@ def check_staged(root: dict, base: pathlib.Path, report: Report) -> list[str]:
             for key in ("path", "initrd"):
                 if isinstance(entry.get(key), str):
                     wanted.append(base / entry[key])
+            # DarwinBoot reads the device tree from "<kernel path>.adt" and refuses to start
+            # without it, so a tree that names the kernel but not its sidecar fails on the
+            # panel with EFI_NOT_FOUND instead of here.
+            if entry.get("type") == "xnu" and isinstance(entry.get("path"), str):
+                wanted.append(base / (entry["path"] + ".adt"))
     for driver in root.get("driver", []):
         if isinstance(driver, dict) and isinstance(driver.get("path"), str):
             wanted.append(base / driver["path"])

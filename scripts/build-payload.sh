@@ -8,8 +8,8 @@
 #
 #   OUT/EFI/UniXNU/UniXNU.efi              the menu, started from the Lumia boot manager
 #   OUT/EFI/UniXNU/unixnu.toml             its configuration
-#   OUT/EFI/UniXNU/Drivers/DarwinBoot.efi  the loader, listed in the config only once a
-#                                          kernel exists
+#   OUT/EFI/UniXNU/Drivers/DarwinBoot.efi  the loader; scripts/stage-kernel.py puts it in the
+#                                          config and stages a kernel beside it
 #
 # Copy that tree over \EFI on EFIESP (or onto the microSD card). This does not touch the
 # Lumia's own UEFI: that firmware stays as Lumia950XLPkg built it, and only starts our
