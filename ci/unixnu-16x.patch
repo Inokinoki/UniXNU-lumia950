@@ -676,6 +676,38 @@ index 0000000..21e8875
 ++    "   }"
 ++#endif
 +     ")";
+diff --git a/patches/xnu-8796/pmap-pending-preemption.patch b/patches/xnu-8796/pmap-pending-preemption.patch
+new file mode 100644
+index 0000000..fa6cb6d
+--- /dev/null
++++ b/patches/xnu-8796/pmap-pending-preemption.patch
+@@ -0,0 +1,26 @@
++diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
++index 38c8d64..544f8a7 100644
++--- a/osfmk/arm/pmap/pmap.c
+++++ b/osfmk/arm/pmap/pmap.c
++@@ -133,6 +133,21 @@ static void flush_mmu_tlb_region_asid_async(vm_offset_t va, size_t length, pmap_
++ static void flush_mmu_tlb_full_asid_async(pmap_t pmap);
++ static pt_entry_t wimg_to_pte(unsigned int wimg, pmap_paddr_t pa);
++ 
+++#if SCHED_HYGIENE_DEBUG && (DEBUG || DEVELOPMENT)
+++/*
+++ * The debug pmap asks between batches of page-table work whether it should give up
+++ * preemption. In other configurations pmap.h maps that question to an inline check of
+++ * the urgent AST; the scheduler-hygiene build routes it to a function in the arm64 pmap
+++ * Apple does not publish. This port has no scheduler-hygiene forcing, so it samples the
+++ * AST the inline check samples.
+++ */
+++bool
+++pmap_pending_preemption(void)
+++{
+++	return _pmap_pending_preemption_real();
+++}
+++#endif /* SCHED_HYGIENE_DEBUG && (DEBUG || DEVELOPMENT) */
+++
++ const struct page_table_ops native_pt_ops =
++ {
++ 	.alloc_id = alloc_asid,
 diff --git a/patches/xnu-8796/restore-arm64-kpc.patch b/patches/xnu-8796/restore-arm64-kpc.patch
 new file mode 100644
 index 0000000..178f26e
