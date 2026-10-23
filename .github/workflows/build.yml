@@ -60,7 +60,7 @@ jobs:
       - name: Parse board.toml and the defconfig
         run: |
           python3 - <<'PY'
-          import pathlib, tomllib
+          import pathlib, re, tomllib
           board = tomllib.loads(pathlib.Path("board.toml").read_text())
           assert board["board"]["name"] == "lumia950", board["board"]
           assert board["kernel"]["defconfig"] == "lumia950_defconfig"
@@ -79,9 +79,17 @@ jobs:
           assert ipsw["version"] in ipsw["url"] and ipsw["build"] in ipsw["url"], ipsw
           assert ipsw["product"] == "iPhone10,6" and ipsw["device_class"] == "d221ap", ipsw
           assert ipsw["chip_id"] == 0x8015 and ipsw["board_id"] == 14, ipsw
-          # Prelink is deliberately absent until a 16.x kernel image exists; merging the
-          # 17.x kernel with this kernelcache would join components from another ABI.
-          assert "prelink" not in board["kernel"], board["kernel"]
+          # The merge step names the 16.x kernel, pins the 16.7.16 kernelcache and lists a
+          # root set; a missing or empty section would silently go back to the prelink gate.
+          prelink = board["kernel"]["prelink"]
+          assert prelink["tool"] == "kits/NativePrelink/emit_prelink.py", prelink
+          assert prelink["kernel"].startswith("build/xnu/ios-obj/"), prelink["kernel"]
+          assert prelink["kernel"].endswith(".unstripped"), prelink["kernel"]
+          assert re.fullmatch(r"[0-9a-f]{64}", prelink["kernelcache_sha256"]), prelink
+          slide = int(prelink["slide"], 0)
+          assert slide % 4096 == 0 and slide != 0, slide
+          roots = prelink["roots"]
+          assert "com.apple.filesystems.apfs" in roots and "com.apple.iokit.IOStorageFamily" in roots, roots
           print("board.toml and defconfig: ok")
           PY
 
@@ -113,6 +121,12 @@ jobs:
           replaced = {name for name in names if (base / f"{name}.patch").is_file()}
           added = names - replaced
           assert not replaced & set(skips), replaced & set(skips)
+          # The kernel this board links must satisfy the merge: the sparse-index ABI the
+          # prelink tool checks for, and the one symbol the 16.7.16 APFS imports that the
+          # published 8796 source does not define.
+          for needed in ("native-prelink-sparse-index", "vfs-getvfs-with-vfsops"):
+              assert needed in added, needed
+          assert "native-prelink-security-init" in added
           print(f"{line}: {len(replaced)} replaced, {len(added)} added, {len(skips)} skipped")
           PY
 
@@ -290,12 +304,11 @@ jobs:
           python3 unixnu fetch xnu libplatform libdispatch AvailabilityVersions \
               libpthread corecrypto-2023 IOStorageFamily -D "$RUNNER_TEMP/device"
 
-      - name: Build the kernel and the device archives
+      - name: Build the kernel, the device archives and the prelinked image
         # feeds.toml pins the 16.x tree, so the compile is the right source line for this
-        # 16.7.16 image. There is no [kernel.prelink] because NativePrelink's patches are
-        # written for 10063 and no tool takes the 8796 kernel yet. The kernel step therefore
-        # compiles, builds the archives and links, then stops at the prelink gate. That one
-        # stop is tolerated; every other failure fails the job.
+        # 16.7.16 image, and [kernel.prelink] pins the kernelcache the merge consumes. The
+        # kernel step compiles, builds the archives, links, then runs the prelink against
+        # that cache. Every stop fails the job now: there is no gate left to tolerate.
         run: |
           set +e
           cd unixnu
@@ -310,16 +323,34 @@ jobs:
           fi
           echo "archive: $archive"
 
-          if [ "$status" -eq 0 ]; then
-            echo "kernel step succeeded without a prelink section; that is unexpected but not a failure"
-            exit 0
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the kernel step failed"
+            exit 1
           fi
-          if grep -q "kernel.prelink" "$GITHUB_WORKSPACE/kernel.log"; then
-            echo "kernel step stopped at the prelink gate, as expected while the 16.x kernel route is open"
-            exit 0
+
+          prelinked=$(find "$UNIXNU_OUT" -path '*/kernel/kernel.macho' -print -quit || true)
+          if [ -z "$prelinked" ]; then
+            echo "::error::the kernel step succeeded without writing a prelinked image"
+            exit 1
           fi
-          echo "::error::the kernel step failed for a reason other than the prelink gate"
-          exit 1
+          echo "prelinked: $prelinked"
+          file "$prelinked"
+          shasum -a 256 "$prelinked"
+          file "$prelinked" | grep -q 'Mach-O 64-bit executable arm64' || {
+            echo "::error::the prelinked image is not an arm64 Mach-O executable"
+            exit 1
+          }
+          report=${prelinked%.macho}.json
+          python3 - "$report" <<'PY'
+          import json, sys
+          report = json.load(open(sys.argv[1]))
+          print(f"components {len(report['components'])}: {report['components']}")
+          print(f"kernel interfaces {len(report['kernel_interfaces'])}, bindings {len(report['bindings'])}")
+          assert report['components'], 'the prelink selected no component'
+          assert report['bindings'], 'the prelink rebound nothing'
+          assert report['sparse_index']['headers'], 'no sparse prelink index'
+          assert report['loadable'] is False, 'the tool no longer marks the candidate unqualified'
+          PY
 
       - name: Name the first compile error
         # util.run keeps a command's output in the log file and echoes only its last 30
@@ -346,12 +377,13 @@ jobs:
         # step after the failing one is skipped by default.
         if: always()
         with:
-          name: lumia950-native-sdhci
+          name: lumia950-kernel
           path: |
             out/*/tree/build/xnu/ios-obj/*/mach.development.bcm2837
             out/*/tree/build/xnu/ios-obj/*/mach.development.bcm2837.unstripped
             out/*/tree/build/native-sdhci/**
             out/*/tree/build/native-legacy-display/**
+            out/*/kernel/**
             out/*/logs/**
             kernel.log
           if-no-files-found: warn

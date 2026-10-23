@@ -37,8 +37,8 @@ archives = [
 
 # The Apple reference image: iPhone X, iOS 16.7.16. The port requires 16.x, so the kernel
 # source and the kernelcache kexts come from the same line: feeds.toml pins
-# xnu-8796.141.3 and patches/xnu-8796/ adapts the patch set to it. Prelink waits for a
-# built kernel image (see the TODO below).
+# xnu-8796.141.3 and patches/xnu-8796/ adapts the patch set to it. The kernelcache this
+# board merges is pinned under [kernel.prelink].
 #
 # The identity is the phone-shaped one: iPhone10,6 (d221ap), one of the two products this
 # restore serves (iPhone10,3 is d22ap). The pinned values were read from the image's own
@@ -55,14 +55,45 @@ board_id = 14
 # name their inputs.
 fetch = ["KernelCache"]
 
-# TODO: [kernel.prelink] returns when NativePrelink takes the 16.x line and the kernelcache
-#       hash is pinned. The source line is settled and the kernel image builds: feeds.toml pins
-#       xnu-8796.141.3 and patches/xnu-8796/ adapts the patch set to it — 47 base patches
-#       unchanged, 5 replaced by their 8796 form, 6 added for this line, 7 skipped with a
-#       stated reason, and NativePrelink's kit patches gated by their file name, which is why
-#       8796 takes none of them. The image the kernel job links is in its artifact under
-#       out/<device>/tree/build/xnu/ios-obj/mach.development.bcm2837; what is missing is the
-#       merge step for this line.
+# The merge step: the 16.x kernel from source plus the kexts of the 16.7.16 kernelcache.
+# The input is the unstripped link the kernel step leaves behind, because this line's
+# makefiles publish no `.noctf` output: CTF is a 17.x kernel feature, so there is nothing
+# to strip from the 16.x image.
+#
+# kernelcache_sha256 is the arm64 slice of the IPSW's KernelCache IM4P after LZFSE
+# decoding: 50,937,856 bytes out of kernelcache.release.iphone10b, read from this image
+# with HTTP range requests. It ties the merge to the component ABI the kernel was built
+# against; scripts/unixnu/kernel.py refuses any other cache before merging.
+#
+# slide = native __PRELINK_TEXT (0xfffffff004004000, ARM64_PLKSEG_ADDR of the kernel
+# script) minus the cache's (0xfffffff004dc8000). It maps the four coalesced ranges 4K
+# aligned to the base of the 48 MiB kext window, below the native __TEXT at
+# 0xfffffff007004000 and clear of every native segment; the tool refuses any placement
+# that would collide, and the address of the gap is not arbitrary: the kernel derives the
+# ranges from these segment commands.
+#
+# roots are the kernelcache components this port uses and does not replace with source:
+# the APFS root volume, its decmpfs provider, the storage stack that publishes IOMedia,
+# and corecrypto (the source corecrypto is linked in as well). The closure also carries
+# AppleEffaceableStorage, CoreAnalyticsFamily, IOCryptoAcceleratorFamily, AppleImage4 and
+# CoreTrust, which those declare as libraries; they have no matching node in the ADT and
+# stay unstarted. Userland components stay out until userland is in scope: the defconfig
+# is the storage bring-up. com.apple.kec.Libm is deliberately absent — nothing selected
+# depends on it, and its 16.7.16 __text embeds a constant table the prelink's instruction
+# inventory does not recognise and refuses to copy. early_security_init is absent too:
+# the address of an AMFI initializer in this cache has not been qualified here, and an
+# unqualified address is worse than none.
+[kernel.prelink]
+tool = "kits/NativePrelink/emit_prelink.py"
+kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped"
+kernelcache_sha256 = "2ec297bac95bcba01046fd0148e97e7e5885c05a6c18827f39f534ba375c1221"
+slide = "-0xdc4000"
+roots = [
+  "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+  "com.apple.filesystems.apfs",
+  "com.apple.iokit.IOStorageFamily",
+  "com.apple.kec.corecrypto",
+]
 
 # [firmware] stays absent on purpose. The route is chainload: the phone's own UEFI
 # (Lumia950XLPkg) starts \EFI\UniXNU\UniXNU.efi from EFIESP, so this repository builds no

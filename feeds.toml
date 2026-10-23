@@ -1,16 +1,19 @@
 # The kernel line of this port is iOS 16's XNU, not the 17.x tree the base repository pins.
 # `scripts/unixnu/feeds.py` reads this file after the base one and a source of the same name
 # replaces it, so the kernel build and every Apple reference derived from it use this tag.
-# 8796.141.3 is the source of the 16.7.16 kernelcache the board downloads.
+# 8796.141.3 is the published drop closest to the 16.7.16 kernelcache the board downloads.
+# That cache reports xnu-8796.142.1.703.8, which Apple has not published; the one symbol the
+# 16.7.16 APFS component imports and 141.3 lacks is carried by
+# patches/xnu-8796/vfs-getvfs-with-vfsops.patch.
 #
 # driverkit_tag and trustcache_tag are earlier tags of the same line: the kernel scripts need
 # iokit/DriverKit headers and EXTERNAL_HEADERS/TrustCache, which 8796.141.3 no longer carries.
 #
 # The differences from the base line are carried by patches/xnu-8796/ in UniXNU: five patches
-# whose 17.x context does not exist here are replaced by their 8796 form, six are added for
-# what this line's sources, the current clang or the runner's iig need, and skip.txt names
-# the seven this line has no mechanism for. Every skip states why, and the build refuses a
-# skip that names a patch the base tree does not have.
+# whose 17.x context does not exist here are replaced by their 8796 form, nine are added for
+# what this line's sources, the current clang, the runner's iig or the merge need, and
+# skip.txt names the seven this line has no mechanism for. Every skip states why, and the
+# build refuses a skip that names a patch the base tree does not have.
 [[source]]
 name = "xnu"
 kind = "refer"
