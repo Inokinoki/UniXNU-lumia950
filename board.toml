@@ -58,7 +58,7 @@ fetch = ["KernelCache"]
 # TODO: [kernel.prelink] returns when a 16.x kernel image exists to merge with this
 #       kernelcache. The source line is settled: feeds.toml pins xnu-8796.141.3 and
 #       patches/xnu-8796/ adapts the patch set to it — 47 base patches unchanged, 5 replaced
-#       by their 8796 form, 2 added for this line, 7 skipped with a stated reason, and
+#       by their 8796 form, 3 added for this line, 7 skipped with a stated reason, and
 #       NativePrelink's kit patches
 #       gated by their file name. What is missing is the image itself: the kernel job has to
 #       compile and link the 16.x tree and leave the file this section names.

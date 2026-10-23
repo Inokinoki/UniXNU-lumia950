@@ -137,11 +137,13 @@ The kernel is on 16.x now. `feeds.toml` pins `xnu-8796.141.3` — a source of th
 replaces the base repository's 17.x entry — and `patches/xnu-8796/` is that line's overlay.
 Of the 54 base patches, 47 apply unchanged; five are replaced by their 8796 form (the
 non-Apple tunables guards, the external archive hook, the machine layer, the native AES
-personalities and the 64-bit physical address shift); two are added: `clang-trivial-auto-var-init`,
-because 16.x passes a clang flag the runner's clang no longer knows, and `clang-uio-stackbuf`,
-which declares the uio stack buffer the way later XNU lines do — current clang rejects an array
-of a one-byte type carrying an eight-byte alignment, which is what every `bsd/` call site used
-to say; and `skip.txt` names the seven this line
+personalities and the 64-bit physical address shift); three are added: `clang-trivial-auto-var-init`,
+because 16.x passes a clang flag the runner's clang no longer knows; `clang-uio-stackbuf`,
+which declares the uio stack buffer the way later XNU lines do, because current clang rejects an
+array of a one-byte type carrying an eight-byte alignment, which is what every `bsd/` call site
+used to say; and `driverkit-rpc-kernel-content`, which keeps the kernel `IORPCMessage` in the rpc
+because the runner's `iig` generates DriverKit dispatch code that reads it instead of deriving the
+message from the mach header; and `skip.txt` names the seven this line
 has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, no
 exclave owner chain, no boot-progress console. NativePrelink's kit patches carry their
 line in the file name, so 8796 does not take them. The build prints every skip and refuses

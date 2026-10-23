@@ -7,8 +7,8 @@
 # iokit/DriverKit headers and EXTERNAL_HEADERS/TrustCache, which 8796.141.3 no longer carries.
 #
 # The differences from the base line are carried by patches/xnu-8796/ in UniXNU: five patches
-# whose 17.x context does not exist here are replaced by their 8796 form, two are added for
-# what this line's sources or the current clang need, and skip.txt names
+# whose 17.x context does not exist here are replaced by their 8796 form, three are added for
+# what this line's sources, the current clang or the runner's iig need, and skip.txt names
 # the seven this line has no mechanism for. Every skip states why, and the build refuses a
 # skip that names a patch the base tree does not have.
 [[source]]

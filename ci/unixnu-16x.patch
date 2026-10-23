@@ -496,6 +496,65 @@ index 0000000..e0bca39
 + 	uio_t auio;
 + 	int error;
 + 
+diff --git a/patches/xnu-8796/driverkit-rpc-kernel-content.patch b/patches/xnu-8796/driverkit-rpc-kernel-content.patch
+new file mode 100644
+index 0000000..d6428b6
+--- /dev/null
++++ b/patches/xnu-8796/driverkit-rpc-kernel-content.patch
+@@ -0,0 +1,53 @@
++diff --git a/iokit/DriverKit/IORPC.h b/iokit/DriverKit/IORPC.h
++index 3ded78c..e9a1633 100644
++--- a/iokit/DriverKit/IORPC.h
+++++ b/iokit/DriverKit/IORPC.h
++@@ -224,6 +224,11 @@ struct IORPC {
++ 	IORPCMessageMach * reply;
++ 	uint32_t           sendSize;
++ 	uint32_t           replySize;
+++#ifdef KERNEL
+++	/* The message in kernel memory, for a call the current iig generated code
+++	 * made to read from the rpc instead of deriving it from the mach header. */
+++	IORPCMessage     * kernelContent;
+++#endif /* KERNEL */
++ };
++ typedef struct IORPC IORPC;
++ 
++diff --git a/iokit/IOKit/IORPC.h b/iokit/IOKit/IORPC.h
++index 3ded78c..e9a1633 100644
++--- a/iokit/IOKit/IORPC.h
+++++ b/iokit/IOKit/IORPC.h
++@@ -224,6 +224,11 @@ struct IORPC {
++ 	IORPCMessageMach * reply;
++ 	uint32_t           sendSize;
++ 	uint32_t           replySize;
+++#ifdef KERNEL
+++	/* The message in kernel memory, for a call the current iig generated code
+++	 * made to read from the rpc instead of deriving it from the mach header. */
+++	IORPCMessage     * kernelContent;
+++#endif /* KERNEL */
++ };
++ typedef struct IORPC IORPC;
++ 
++diff --git a/iokit/Kernel/IOUserServer.cpp b/iokit/Kernel/IOUserServer.cpp
++index 5d1d922..1406bef 100644
++--- a/iokit/Kernel/IOUserServer.cpp
+++++ b/iokit/Kernel/IOUserServer.cpp
++@@ -3209,7 +3209,7 @@ IOUserServer::server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
++ 		msgout = (typeof(msgout))ikm_header(replykmsg);
++ 	}
++ 
++-	IORPC rpc = { .message = msgin, .reply = msgout, .sendSize = msgin->msgh.msgh_size, .replySize = replyAlloc };
+++	IORPC rpc = { .message = msgin, .reply = msgout, .sendSize = msgin->msgh.msgh_size, .replySize = replyAlloc, .kernelContent = message };
++ 
++ 	if (object) {
++ 		kern_allocation_name_t prior;
++@@ -3358,6 +3358,7 @@ IOUserServerUEXTTrap(OSObject * object, void * p1, void * p2, void * p3, void *
++ 	rpc.sendSize  = mach->msgh.msgh_size;
++ 	rpc.reply     = (IORPCMessageMach *) (p + inSize);
++ 	rpc.replySize = ((uint32_t) (sizeof(buffer.buffer) - inSize));    // inSize was checked
+++	rpc.kernelContent = message;
++ 
++ 	message->objects[0] = 0;
++ 	if ((action = OSDynamicCast(OSAction, object))) {
 diff --git a/patches/xnu-8796/external-archive-dependencies.patch b/patches/xnu-8796/external-archive-dependencies.patch
 new file mode 100644
 index 0000000..8fd5ce1
