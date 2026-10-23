@@ -39,6 +39,17 @@ if [ ! -f "$DARWINBOOT/DarwinBootPkg/DarwinBoot.dsc" ]; then
   exit 1
 fi
 
+# The loader has to be the one this repository stages for: it reads the kernel from whichever
+# volume holds it, so Payloads/ can live on MainOS while the menu stays on EFIESP.
+# ci/darwinboot-payload-volume.patch carries that change until it is upstream; a checkout that
+# already has it makes the apply a no-op, so building twice is safe.
+if git -C "$DARWINBOOT" apply --reverse --check "$ROOT/ci/darwinboot-payload-volume.patch" >/dev/null 2>&1; then
+  echo "== DarwinBoot: payload-volume change already there"
+else
+  git -C "$DARWINBOOT" apply "$ROOT/ci/darwinboot-payload-volume.patch"
+  echo "== DarwinBoot: applied ci/darwinboot-payload-volume.patch"
+fi
+
 echo "== UniXNU and UniXNUDxe"
 UNIXNU_EDK2=$EDK2 JOBS=$JOBS PYTHON_COMMAND=$PYTHON "$UNIXNU/package/build.sh" -b "$TARGET" -t "$TOOLCHAIN"
 

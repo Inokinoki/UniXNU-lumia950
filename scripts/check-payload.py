@@ -249,6 +249,9 @@ def main() -> int:
                         help=f"config to check (default: {CONFIG_RELATIVE} in this repository)")
     parser.add_argument("--payload-dir", type=pathlib.Path,
                         help="staged ESP root, e.g. out/payload; every named file must exist there")
+    parser.add_argument("--payload-files", type=pathlib.Path,
+                        help="second staged tree that carries the payload files, for a kernel on "
+                             "MainOS; a name this tree lacks has to exist in that one")
     parser.add_argument("--panel", default="1440x2560",
                         help="panel in pixels, for the layout report (default: the Lumia 950's)")
     args = parser.parse_args()
@@ -262,8 +265,18 @@ def main() -> int:
     root = check_config(args.config, (width, height), report)
     if root and args.payload_dir:
         base = args.payload_dir / CONFIG_DIR
-        missing = [path for path in check_staged(root, base, report) if not pathlib.Path(path).is_file()]
-        for path in missing:
+        # A split tree is two directories on the phone, not one: the menu and its drivers stay
+        # on EFIESP, and the kernel and its sidecars sit on MainOS. Both are checked, so a
+        # missing file still fails — here rather than as EFI_NOT_FOUND on the panel.
+        elsewhere = (args.payload_files / CONFIG_DIR) if args.payload_files else None
+        for path in check_staged(root, base, report):
+            staged = pathlib.Path(path)
+            if staged.is_file():
+                continue
+            relative = staged.relative_to(base)
+            if elsewhere is not None and (elsewhere / relative).is_file():
+                report.note(f"on the payload tree: {relative.as_posix()}")
+                continue
             report.error(f"the staged payload has no {path}; stage the EFI files before checking")
     elif root:
         for path in check_staged(root, args.config.parent, report):

@@ -2,7 +2,17 @@
 r"""Stage a kernel beside the UniXNU menu, for the chainload route.
 
     python3 scripts/stage-kernel.py --kernel build/kernel/kernel.macho --unique-chip-id HEX \
-        [--trustcache FILE] [--data FILE] [--out build/boot]
+        [--trustcache FILE] [--data FILE] [--ntfs-driver FILE] \
+        [--out build/boot] [--payload-out build/mainos]
+
+Two placements are staged. Without --payload-out the whole tree goes on EFIESP, which only
+works while the kernel and its sidecars fit in the partition. With --payload-out the menu,
+its configuration and the drivers stay in --out for EFIESP, and Payloads/ (the kernel and
+its sidecars) is written to --payload-out for MainOS: the prelinked image is 56 MB and
+EFIESP is 32 MB, so that is where the kernel has to live. DarwinBoot is what makes the
+split work — it reads the kernel from whichever volume holds it — and it only reaches
+MainOS at all because --ntfs-driver stages a driver for that NTFS volume, which the
+Lumia's own firmware image does not have (scripts/get-ntfs-driver.py fetches it).
 
 The menu stage is what the phone has run: UniXNU finds its configuration on EFIESP, draws on
 the panel and takes the volume keys (scripts/build-payload.sh). This adds the second stage to
@@ -146,7 +156,8 @@ def adt_command(spec: dict, adt: Path, args: argparse.Namespace) -> list[str]:
     return command
 
 
-def render_config(spec: dict, menu_tree: Path, initrd: bool, arguments: str) -> str:
+def render_config(spec: dict, menu_tree: Path, initrd: bool, arguments: str,
+                  ntfs: bool) -> str:
     source = (menu_tree / CONFIG_REL).read_text()
     if source.count(MARKER) != 1:
         fail(f"{CONFIG_REL} needs exactly one {MARKER!r} line; the kernel entry is inserted "
@@ -154,9 +165,14 @@ def render_config(spec: dict, menu_tree: Path, initrd: bool, arguments: str) -> 
     title = spec.get("title", "UniXNU")
     if '"' in title or "\\" in title:
         fail(f'board.toml [payload] title {title!r} cannot go in a TOML string unchanged')
-    entry = (f'[[driver]]\npath = "Drivers/DarwinBoot.efi"\nconnect = true\n\n'
-             f'[[entry]]\nid = "xnu"\ntitle = "{title}"\ntype = "xnu"\n'
-             f'path = "Payloads/{KERNEL_NAME}"\n')
+    # The NTFS driver comes first: it has to be started and connected before the kernel on
+    # MainOS is a file at all, and drivers are started in the order they appear here.
+    entry = ''
+    if ntfs:
+        entry += '[[driver]]\npath = "Drivers/ntfs.efi"\nconnect = true\n\n'
+    entry += (f'[[driver]]\npath = "Drivers/DarwinBoot.efi"\nconnect = true\n\n'
+              f'[[entry]]\nid = "xnu"\ntitle = "{title}"\ntype = "xnu"\n'
+              f'path = "Payloads/{KERNEL_NAME}"\n')
     if initrd:
         entry += 'initrd = "Payloads/scratch-data.img"\n'
     entry += f'args = "{arguments}"\n'
@@ -166,6 +182,17 @@ def render_config(spec: dict, menu_tree: Path, initrd: bool, arguments: str) -> 
     if staged.count('default = "exit"') != 1:
         fail(f'{CONFIG_REL} needs exactly one default = "exit" to replace')
     return staged.replace('default = "exit"', 'default = "xnu"')
+
+
+def report_tree(label: str, tree: Path, where: str) -> None:
+    staged = sorted(path for path in tree.rglob("*") if path.is_file())
+    total = sum(path.stat().st_size for path in staged)
+    print(f"== {label}: {tree}")
+    for path in staged:
+        print(f"  {path.relative_to(tree).as_posix():<44} {path.stat().st_size:>10} B  "
+              f"{sha256(path)[:16]}")
+    print(f"  {'total':<44} {total:>10} B")
+    print(f"  {where}")
 
 
 def main() -> int:
@@ -181,7 +208,15 @@ def main() -> int:
                         help="the menu stage to add to: out/payload from build-payload.sh "
                              "(default: out/payload if it exists, else payload/)")
     parser.add_argument("--out", type=Path, default=ROOT / "build/boot",
-                        help="the staged tree (default: build/boot)")
+                        help="the staged EFIESP tree (default: build/boot)")
+    parser.add_argument("--payload-out", type=Path,
+                        help="stage Payloads/ into this second tree, for MainOS, when the kernel "
+                             "does not fit EFIESP; copy its EFI/UniXNU/Payloads to \\EFI\\UniXNU "
+                             "on MainOS")
+    parser.add_argument("--ntfs-driver", type=Path,
+                        help="the NTFS driver from scripts/get-ntfs-driver.py, staged as "
+                             "Drivers/ntfs.efi; without it nothing can read MainOS, and the "
+                             "kernel has to stay in --out")
     parser.add_argument("--unique-chip-id", required=True,
                         help="64-bit platform seed in hex; it is not stored in this repository")
     parser.add_argument("--dram-size", type=lambda value: int(value, 0),
@@ -202,9 +237,13 @@ def main() -> int:
         fail(f"kernel not found: {args.kernel}; pass the kernel job's artifact")
     header = check_kernel(args.kernel)
     arguments = kernel_arguments(spec, args.args)
-    for name, path in (("trust cache", args.trustcache), ("Data seed", args.data)):
+    for name, path in (("trust cache", args.trustcache), ("Data seed", args.data),
+                       ("NTFS driver", args.ntfs_driver)):
         if path is not None and not path.is_file():
             fail(f"{name} not found: {path}")
+    if args.ntfs_driver is not None and args.ntfs_driver.read_bytes()[:2] != b"MZ":
+        fail(f"{args.ntfs_driver} is not a PE image; UniXNU would fail to start it and MainOS "
+             "would stay unreadable")
 
     # The menu stage carries the two EFI binaries; the repository's payload/ directory only
     # carries the configuration, so adding a kernel to it directly would stage a tree the
@@ -222,10 +261,21 @@ def main() -> int:
     out = args.out if args.out.is_absolute() else ROOT / args.out
     if out.resolve() == menu_tree.resolve():
         fail("--out is the menu tree; stage into a new directory so the menu build stays intact")
+    payload_root = out if args.payload_out is None else args.payload_out
+    if not payload_root.is_absolute():
+        payload_root = ROOT / payload_root
+    if payload_root.resolve() == menu_tree.resolve():
+        fail("--payload-out is the menu tree; stage into a new directory")
+    split = payload_root.resolve() != out.resolve()
+    if split and out.resolve() in payload_root.resolve().parents:
+        fail(f"--payload-out {payload_root} is inside --out {out}; the EFIESP tree is what the "
+             "firmware reads, so the payloads belong beside it, not under it")
     if out.exists():
         shutil.rmtree(out)
     shutil.copytree(menu_tree, out)
-    payloads = out / PAYLOADS_REL
+    if split and payload_root.exists():
+        shutil.rmtree(payload_root)
+    payloads = payload_root / PAYLOADS_REL
     payloads.mkdir(parents=True, exist_ok=True)
 
     shutil.copyfile(args.kernel, payloads / KERNEL_NAME)
@@ -243,26 +293,38 @@ def main() -> int:
         shutil.copyfile(args.trustcache, payloads / f"{KERNEL_NAME}.trustcache")
     if args.data:
         shutil.copyfile(args.data, payloads / "scratch-data.img")
-    (out / CONFIG_REL).write_text(render_config(spec, menu_tree, bool(args.data), arguments))
+    if args.ntfs_driver:
+        drivers = out / "EFI/UniXNU/Drivers"
+        drivers.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(args.ntfs_driver, drivers / "ntfs.efi")
+    (out / CONFIG_REL).write_text(render_config(spec, menu_tree, bool(args.data), arguments,
+                                               bool(args.ntfs_driver)))
 
     print("== check")
-    checked = subprocess.run([sys.executable, str(ROOT / "scripts/check-payload.py"),
-                              "--config", str(out / CONFIG_REL), "--payload-dir", str(out)],
-                             cwd=ROOT)
+    command = [sys.executable, str(ROOT / "scripts/check-payload.py"),
+               "--config", str(out / CONFIG_REL), "--payload-dir", str(out)]
+    if split:
+        # Every name in the configuration still has to exist somewhere; with a split tree the
+        # kernel and its sidecars are in the second one.
+        command += ["--payload-files", str(payload_root)]
+    checked = subprocess.run(command, cwd=ROOT)
     if checked.returncode != 0:
         fail("the staged tree does not pass scripts/check-payload.py")
 
-    staged = sorted(path for path in out.rglob("*") if path.is_file())
-    total = sum(path.stat().st_size for path in staged)
-    print("== output")
-    print(f"{out}")
-    for path in staged:
-        print(f"  {path.relative_to(out).as_posix():<44} {path.stat().st_size:>10} B  {sha256(path)[:16]}")
-    print(f"  {'total':<44} {total:>10} B")
+    report_tree("EFIESP tree", out,
+                "copy EFI over \\EFI on EFIESP" if split else
+                "copy EFI over \\EFI on EFIESP, or onto the microSD card")
+    if split:
+        report_tree("MainOS tree", payload_root,
+                    "copy EFI\\UniXNU\\Payloads to \\EFI\\UniXNU\\Payloads on MainOS")
     print()
     print(f"kernel {header['size']} B, {header['ncmds']} load commands, args {arguments!r}")
-    print(f"copy {out / 'EFI'} over \\EFI on EFIESP, or onto the microSD card when the tree is "
-          "bigger than the partition")
+    if not split:
+        print("note: the whole tree has to fit EFIESP; add --payload-out to keep the kernel on "
+              "MainOS instead")
+    elif not args.ntfs_driver:
+        print("note: no --ntfs-driver, so MainOS is not a volume the firmware can read; the "
+              "kernel will not be found there")
     return 0
 
 

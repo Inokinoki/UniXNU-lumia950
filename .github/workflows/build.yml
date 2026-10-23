@@ -133,7 +133,8 @@ jobs:
       - name: Check the build scripts
         run: |
           python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py scripts/check-payload.py \
-              scripts/make-lumia950-adt.py scripts/check-adt.py scripts/stage-kernel.py
+              scripts/get-ntfs-driver.py scripts/make-lumia950-adt.py scripts/check-adt.py \
+              scripts/stage-kernel.py
           bash -n scripts/build-payload.sh
 
       - name: Check the chainload payload configuration
@@ -155,6 +156,32 @@ jobs:
               --unique-chip-id 1122334455667788 --menu-tree build/menu --out build/boot
           grep -q 'default = "xnu"' build/boot/EFI/UniXNU/unixnu.toml
           test -s build/boot/EFI/UniXNU/Payloads/kernel.macho.adt
+
+      - name: The split tree keeps the kernel off EFIESP
+        # The prelinked kernel is 56 MB and EFIESP is 32 MB, so the kernel and its sidecars go
+        # to MainOS while the menu, its configuration and the driver that reads MainOS stay on
+        # EFIESP. The checker has to accept that arrangement and reject a name in neither tree.
+        run: |
+          : > build/ntfs.efi
+          printf 'MZ' | dd of=build/ntfs.efi conv=notrunc status=none
+          python3 scripts/stage-kernel.py --kernel build/ci-kernel.macho \
+              --unique-chip-id 1122334455667788 --menu-tree build/menu \
+              --ntfs-driver build/ntfs.efi --out build/boot-efiesp \
+              --payload-out build/boot-mainos
+          grep -q 'path = "Drivers/ntfs.efi"' build/boot-efiesp/EFI/UniXNU/unixnu.toml
+          test -f build/boot-efiesp/EFI/UniXNU/Drivers/ntfs.efi
+          test ! -e build/boot-efiesp/EFI/UniXNU/Payloads
+          test -s build/boot-mainos/EFI/UniXNU/Payloads/kernel.macho.adt
+          set +e
+          out=$(python3 scripts/check-payload.py --config build/boot-efiesp/EFI/UniXNU/unixnu.toml \
+              --payload-dir build/boot-efiesp 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::the checker passed an EFIESP tree whose kernel is nowhere"
+            exit 1
+          fi
 
       - name: The ADT generator and its checker
         # DarwinBoot hands this tree to XNU. The checker parses it with the encoding XNU reads,

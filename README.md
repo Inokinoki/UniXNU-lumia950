@@ -47,9 +47,11 @@ The menu stage proves the firmware services; the kernel stage adds the loader an
 the same tree. It is a separate command so the menu keeps working when the kernel does not:
 
 ```sh
-bash scripts/build-payload.sh                    # the menu, in out/payload
+bash scripts/build-payload.sh                     # the menu, in out/payload
+python3 scripts/get-ntfs-driver.py                # out/ntfs_aa64.efi, reads MainOS
 python3 scripts/stage-kernel.py --kernel kernel.macho --unique-chip-id HEX \
-    --menu-tree out/payload --out build/boot      # the same tree, with a kernel in it
+    --menu-tree out/payload --ntfs-driver out/ntfs_aa64.efi \
+    --out build/boot --payload-out build/mainos   # 280 KB for EFIESP, 56 MB for MainOS
 ```
 
 `--kernel` takes the prelinked image from the `lumia950-kernel` artifact
@@ -61,9 +63,11 @@ requires a 64-bit ARM `MH_EXECUTE` kernel (what DarwinBoot parses), runs
 `scripts/make-lumia950-adt.py` with the values in `[payload]` and `[payload.adt]`, writes the
 `.adt` sidecar DarwinBoot reads as `<kernel>.adt`, and inserts the `[[driver]]` and `xnu` entry
 into the staged copy of `unixnu.toml` — the same file, so the panel layout and the action
-entries cannot drift between the two stages. Then `check-adt.py` and `check-payload.py` re-read
+entries cannot drift between the two stages. With `--ntfs-driver` it stages a fifth thing, the
+driver that makes MainOS a readable volume. Then `check-adt.py` and `check-payload.py` re-read
 what it wrote; the second also refuses a tree that names a kernel without its `.adt` sidecar,
-a failure that would otherwise be `EFI_NOT_FOUND` on the panel.
+a failure that would otherwise be `EFI_NOT_FOUND` on the panel, and it accepts the split tree
+only when every name the configuration uses exists in one of the two halves.
 
 One assumption is settled by the first flash, not by anything in this repository: DarwinBoot
 starts the kernel only when the firmware runs at **EL1** (`DarwinCurrentEl () == 4`). If the
@@ -71,9 +75,25 @@ Lumia's UEFI hands control over at EL2, the loader prints `unsupported inputs or
 level; firmware retained` on the panel and returns to the menu — a visible, harmless failure
 that names its own cause. Nothing here is built around it until the phone says which it is.
 
-The native kernel is 14.8 MB and the prelinked image is larger still, while EFIESP is a small
-partition; the stager prints the tree's size, and the microSD card carries the same tree when
-EFIESP cannot.
+**Where the kernel lives.** EFIESP is 32 MB and the prelinked image is 56 MB, so the kernel
+cannot go on EFIESP: it goes on **MainOS**, the phone's NTFS OS volume. `--payload-out` splits
+the staged tree for that — the menu, its configuration and the drivers stay in `--out` for
+EFIESP (280 KB), and `Payloads/` with the kernel and its sidecars is written to
+`--payload-out` for MainOS. Two things make the split work, and both are staged:
+
+- The Lumia's UEFI image carries EDK II's FAT driver and no NTFS driver at all, so MainOS is
+  not a volume until one is started. `--ntfs-driver` stages EfiFs's read-only NTFS driver
+  (`scripts/get-ntfs-driver.py` fetches v1.13 and refuses anything but its pinned hash) as
+  `\EFI\UniXNU\Drivers\ntfs.efi`, first in the `[[driver]]` list; UniXNU starts it, and
+  `connect_all` binds it to the partition.
+- `DarwinBoot` reads the kernel from the configuration's own volume first and then from every
+  other volume with a file system, and takes `.adt`, `.trustcache` and `.gpuaddon` from
+  whichever volume the kernel came from. `ci/darwinboot-payload-volume.patch` carries that
+  change, which `scripts/build-payload.sh` applies before it builds the loader; the panel
+  prints `DARWINBOOT: payload from another volume (n of m)` when the scan is what found it.
+
+Without the split the whole tree has to fit EFIESP, which is only true of the native 14.8 MB
+kernel with no kexts — not of the image an iOS 16 boot needs.
 
 ### Testing it on the phone
 
@@ -88,7 +108,8 @@ payload is staged with the menu under both names:
 | `\EFI\BOOT\BOOTAA64.EFI` | `EFI/BOOT/BOOTAA64.EFI` — the same `UniXNU.efi` |
 | `\EFI\UniXNU\unixnu.toml` | `EFI/UniXNU/unixnu.toml` |
 | `\EFI\UniXNU\Drivers\DarwinBoot.efi` | the loader, present from the menu stage on |
-| `\EFI\UniXNU\Payloads\kernel.macho` and its `.adt` | only in the kernel stage's tree |
+| `\EFI\UniXNU\Drivers\ntfs.efi` | only with `--ntfs-driver`, and only needed for a kernel on MainOS |
+| `\EFI\UniXNU\Payloads\kernel.macho` and its `.adt` | not here in a split tree: on MainOS, under `\EFI\UniXNU\Payloads` |
 
 Unlocking with WPInternals and installing the Lumia950XLPkg UEFI (`UEFI.elf` in the EFIESP
 root, the Boot Shim application, a BCD entry for it) come first and are not in this
@@ -104,12 +125,15 @@ what actually boots it, and pointing it back at the mobile-startup GUID
    ARM32 (`BOOTARM.EFI`), so `BOOTAA64.EFI` is usually free — but if one is already there it
    is somebody else's fallback loader, so rename it rather than overwriting it.
 2. Copy `out/payload/EFI` over `\EFI` (menu stage), or `build/boot/EFI` (kernel stage,
-   which is the same tree plus `Payloads/` and the driver entry). Nothing else on the
-   partition changes.
-3. Reboot and leave the splash alone. Expect the UniXNU menu for 20 s; in the kernel stage
+   which is the same tree plus the driver entries). Nothing else on the partition changes.
+3. For a split tree, mount MainOS and copy `build/mainos/EFI/UniXNU/Payloads` to
+   `\EFI\UniXNU\Payloads` there — 56 MB, so check the free space first. MainOS is the volume
+   Windows Phone itself boots from; the copy adds a directory and changes nothing else, and
+   `\EFI\UniXNU\Payloads` there can be deleted to undo it.
+4. Reboot and leave the splash alone. Expect the UniXNU menu for 20 s; in the kernel stage
    the countdown selects `iOS 16.7.16`, in the menu stage "Exit to firmware" opens the
    firmware's own menu, the one with System Info.
-4. To go back to Windows, mount EFIESP again and delete `\EFI\BOOT\BOOTAA64.EFI`. While it
+5. To go back to Windows, mount EFIESP again and delete `\EFI\BOOT\BOOTAA64.EFI`. While it
    is there, that file is what the firmware starts.
 
 What each outcome means:
@@ -120,6 +144,8 @@ What each outcome means:
 | text console instead of cards | GOP is present but the graphics path is not; see `[ui] console` |
 | `DARWINBOOT: unsupported inputs or exception level; firmware retained` | the firmware runs at EL2, not EL1, or the entry passed inputs the loader refuses (read the line: it names which) |
 | `DARWINBOOT:` names a file or `EFI_COMPROMISED_DATA` | the `Payloads` tree is incomplete: the kernel, its `.adt` sidecar and the placeholders in the ADT have to match what the config hands over |
+| `DARWINBOOT: payload not on any of N volume(s)` | the kernel is not on the config's volume and MainOS was not mounted: `ntfs.efi` failed to start, `connect_all` is off, or the copy went somewhere else. `N` is how many volumes the loader could read |
+| `DARWINBOOT: payload from another volume (n of m)` | the split worked and the kernel was read from MainOS; the boot continues from there |
 | screen stays black after the entry, phone resets a few seconds later | the kernel started and stopped; nothing can be drawn after `ExitBootServices` yet (blocker 3), so this is the expected blind rung, and the reset is the watchdog |
 | menu draws, `Restart` / `Power off` do nothing | MSM8992 has no PSCI SYSTEM_RESET or SYSTEM_OFF; those entries call the firmware's `ResetSystem` |
 | menu draws, `Restart` or `Power off` does nothing | the firmware's `ResetSystem` for that action is a stub |

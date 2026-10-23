@@ -1,0 +1,125 @@
+diff --git a/DarwinBootPkg/Driver/DarwinBoot.c b/DarwinBootPkg/Driver/DarwinBoot.c
+index 25ce2d2..dbf3f48 100644
+--- a/DarwinBootPkg/Driver/DarwinBoot.c
++++ b/DarwinBootPkg/Driver/DarwinBoot.c
+@@ -452,6 +452,99 @@ AllocateWindow (KERNEL *Kernel, UINT64 WindowSize, EFI_PHYSICAL_ADDRESS *Address
+   return Status;
+ }
+ 
++//
++// The payload does not have to live on the volume the configuration was read from. On the
++// Lumia 950 the menu's volume is EFIESP, which is 32 MB, while the prelinked kernel is over
++// 50 MB, so the kernel is kept on MainOS instead. That volume only becomes reachable here
++// because an NTFS driver was started from [[driver]]: the firmware's own image carries FAT
++// and nothing else, so without that driver MainOS has no file system to scan.
++//
++STATIC
++EFI_STATUS
++OpenVolumeRoot (
++  IN  EFI_HANDLE         Volume,
++  OUT EFI_FILE_PROTOCOL  **Root
++  )
++{
++  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Fs;
++  EFI_STATUS                       Status;
++
++  Status = gBS->HandleProtocol (Volume, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
++  if (EFI_ERROR (Status)) { return Status; }
++  return Fs->OpenVolume (Fs, Root);
++}
++
++STATIC
++EFI_STATUS
++OpenPayloadVolume (
++  IN  EFI_HANDLE         Volume,
++  IN  CONST CHAR16       *Path,
++  OUT EFI_FILE_PROTOCOL  **Root,
++  OUT VOID               **Data,
++  OUT UINTN              *Size
++  )
++{
++  EFI_STATUS         Status;
++  EFI_HANDLE         *Handles;
++  EFI_FILE_PROTOCOL  *Other;
++  UINTN              Count;
++  UINTN              Index;
++  UINTN              Scanned;
++
++  *Root = NULL;
++  *Data = NULL;
++  *Size = 0;
++  Status = OpenVolumeRoot (Volume, Root);
++  if (EFI_ERROR (Status)) { return Status; }
++  Status = ReadFile (*Root, Path, SIZE_128MB, Data, Size);
++  if (Status != EFI_NOT_FOUND) {
++    // Anything but "not here" is a verdict on the file itself, so it is not scanned for.
++    if (EFI_ERROR (Status)) { (*Root)->Close (*Root); *Root = NULL; }
++    return Status;
++  }
++
++  //
++  // Every other volume is a candidate. Whichever root wins is the one the sidecars
++  // (.adt, .trustcache, .gpuaddon) are read from, so they travel with the kernel rather
++  // than staying behind with the menu.
++  //
++  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiSimpleFileSystemProtocolGuid, NULL, &Count, &Handles);
++  if (EFI_ERROR (Status)) {
++    (*Root)->Close (*Root);
++    *Root = NULL;
++    return EFI_NOT_FOUND;
++  }
++
++  Scanned = 0;
++  for (Index = 0; Index < Count; Index++) {
++    if ((Handles[Index] == Volume) || EFI_ERROR (OpenVolumeRoot (Handles[Index], &Other))) {
++      continue;
++    }
++
++    Scanned++;
++    if (!EFI_ERROR (ReadFile (Other, Path, SIZE_128MB, Data, Size))) {
++      (*Root)->Close (*Root);
++      *Root = Other;
++      Print (L"DARWINBOOT: payload from another volume (%lu of %lu)
++", (UINT64)(Index + 1), (UINT64)Count);
++      break;
++    }
++
++    Other->Close (Other);
++  }
++
++  FreePool (Handles);
++  if (*Data == NULL) {
++    Print (L"DARWINBOOT: payload not on any of %lu volume(s)
++", (UINT64)(Scanned + 1));
++    (*Root)->Close (*Root);
++    *Root = NULL;
++    return EFI_NOT_FOUND;
++  }
++
++  return EFI_SUCCESS;
++}
++
+ STATIC
+ EFI_STATUS
+ EFIAPI
+@@ -461,7 +554,6 @@ Boot (
+   )
+ {
+   EFI_STATUS                      Status;
+-  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *Fs;
+   EFI_FILE_PROTOCOL               *Root;
+   VOID                            *Image;
+   VOID                            *Tree;
+@@ -533,11 +625,7 @@ Boot (
+   Map = NULL;
+   Address = 0;
+   Capacity = 0;
+-  Status = gBS->HandleProtocol (Request->Volume, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
+-  if (EFI_ERROR (Status)) { return Status; }
+-  Status = Fs->OpenVolume (Fs, &Root);
+-  if (EFI_ERROR (Status)) { return Status; }
+-  Status = ReadFile (Root, Request->KernelPath, SIZE_128MB, &Image, &ImageSize);
++  Status = OpenPayloadVolume (Request->Volume, Request->KernelPath, &Root, &Image, &ImageSize);
+   if (EFI_ERROR (Status)) { goto Fail; }
+   Status = ParseKernel (Image, ImageSize, &Kernel);
+   if (EFI_ERROR (Status)) { goto Fail; }
