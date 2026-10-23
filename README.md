@@ -137,7 +137,7 @@ The kernel is on 16.x now. `feeds.toml` pins `xnu-8796.141.3` — a source of th
 replaces the base repository's 17.x entry — and `patches/xnu-8796/` is that line's overlay.
 Of the 54 base patches, 47 apply unchanged; five are replaced by their 8796 form (the
 non-Apple tunables guards, the external archive hook, the machine layer, the native AES
-personalities and the 64-bit physical address shift); four are added: `clang-trivial-auto-var-init`,
+personalities and the 64-bit physical address shift); five are added: `clang-trivial-auto-var-init`,
 because 16.x passes a clang flag the runner's clang no longer knows; `clang-uio-stackbuf`,
 which declares the uio stack buffer the way later XNU lines do, because current clang rejects an
 array of a one-byte type carrying an eight-byte alignment, which is what every `bsd/` call site
@@ -145,19 +145,24 @@ used to say; and `driverkit-rpc-kernel-content`, which keeps the kernel `IORPCMe
 because the runner's `iig` generates DriverKit dispatch code that reads it instead of deriving the
 message from the mach header; and `restore-arm64-kpc`, which restores `osfmk/arm64/kpc.c` from
 `xnu-10063.141.1` because this line's file list builds it and its source drop does not publish it —
-on a non-Apple SoC the file takes its own not-implemented branch; and `skip.txt` names the seven this line
+on a non-Apple SoC the file takes its own not-implemented branch; and `compile-records`, which makes
+the compile rules write the per-object JSON records the archive builders read to reuse this kernel's
+exact flags, which this line does not write but the 17.x line's tooling expects; and `skip.txt` names the seven this line
 has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, no
 exclave owner chain, no boot-progress console. NativePrelink's kit patches carry their
 line in the file name, so 8796 does not take them. The build prints every skip and refuses
 a skip list that names a patch the base tree no longer has, so an omission cannot become a
 silent hole. `[kernel.prelink]` stays out until a 16.x kernel image exists to merge.
 
-The first 16.x compile stops in `bsd/`, not at the gate. The patch set applies and the
-bootstrap pass compiles for about three minutes before the first error, so the job fails with
-`out/<device>/logs/kernel-bootstrap.log` in its artifact — the log the step now uploads and
-greps for `error:` on a failure, because the driver echoes only the last thirty lines of a
-command. What that log first reported, an aligned-char uio stack buffer, is the
-`clang-uio-stackbuf` addition above.
+The 16.x kernel now compiles. All five components build, and the bootstrap pass reaches the
+link, where it stops on `native_legacy_display_probe` — the one symbol whose archive is
+built after that pass, which is exactly what the pass is for. Four stops stood in front of
+that and are recorded above: the aligned-char uio stack buffer (`clang-uio-stackbuf`), the
+`iig`-generated DriverKit dispatch (`driverkit-rpc-kernel-content`), the omitted
+`osfmk/arm64/kpc.c` (`restore-arm64-kpc`) and the missing compile records
+(`compile-records`). A failed run hands over `out/<device>/logs/kernel-bootstrap.log`: the
+step uploads it and greps it for `error:` because the driver echoes only the last thirty
+lines of a command.
 
 ## The reference image
 

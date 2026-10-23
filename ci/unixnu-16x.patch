@@ -496,6 +496,34 @@ index 0000000..e0bca39
 + 	uio_t auio;
 + 	int error;
 + 
+diff --git a/patches/xnu-8796/compile-records.patch b/patches/xnu-8796/compile-records.patch
+new file mode 100644
+index 0000000..70afbf2
+--- /dev/null
++++ b/patches/xnu-8796/compile-records.patch
+@@ -0,0 +1,22 @@
++diff --git a/makedefs/MakeInc.rule b/makedefs/MakeInc.rule
++index 59e4063..ba1573e 100644
++--- a/makedefs/MakeInc.rule
+++++ b/makedefs/MakeInc.rule
++@@ -400,7 +400,7 @@ S_RULE_2=
++ # Compilation rules to generate .o from .c for normal files
++ #
++ C_RULE_0=@$(LOG_CC) "$@"
++-C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
+++C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} -MJ$@.json
++ C_RULE_1B=$(<F)
++ C_RULE_2=
++ 
++@@ -424,7 +424,7 @@ C_RULE_4B_D=${C_RULE_4B}
++ #   The config tool slickly changes the last source filename char to 'o'
++ #   for the object filename.
++ P_RULE_0=@$(LOG_CXX) "$@"
++-P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
+++P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS} -MJ$@.json
++ P_RULE_1B=$(<F)
++ P_RULE_2=
++ 
 diff --git a/patches/xnu-8796/driverkit-rpc-kernel-content.patch b/patches/xnu-8796/driverkit-rpc-kernel-content.patch
 new file mode 100644
 index 0000000..d6428b6
