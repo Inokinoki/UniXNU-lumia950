@@ -1,5 +1,5 @@
 #!/bin/sh
-# Apply this repository's two HackiOS deltas to a checkout.
+# Apply this repository's HackiOS deltas to a checkout.
 #
 #   lumia950/ci/apply-hackios-patches.sh [tree]        (default: $HOME/hackios)
 #
@@ -10,10 +10,11 @@
 #
 #   hackios-kernel-setup.patch    xnu-deps/setup.sh: install the uuid headers, hand dsymutil to xcrun
 #   hackios-userland-build.patch  userland/build.sh: copy drawable_test only when it was built
+#   hackios-gic-v2.patch          GICv2: the driver, the loader's platform and handover, the QEMU switch
 #
-# Both paths are in the HackiOS work tree; the second file belongs to the userland repository,
-# whose git directory is the tree's .userland.git. git apply does not consult an index, so the
-# tree's own repository is enough for either.
+# Every path is in the HackiOS work tree (the second file belongs to the userland repository,
+# whose git directory is the tree's .userland.git; the third is the kernel overlay and the
+# loader). git apply does not consult an index, so the tree's own repository is enough.
 set -eu
 tree=${1:-$HOME/hackios}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -32,3 +33,4 @@ apply() { # apply WHAT PATCH
 
 apply "xnu-deps/setup.sh" "$here/hackios-kernel-setup.patch"
 apply "userland/build.sh" "$here/hackios-userland-build.patch"
+apply "GICv2" "$here/hackios-gic-v2.patch"

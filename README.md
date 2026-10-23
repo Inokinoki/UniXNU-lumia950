@@ -97,7 +97,7 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | ADT | generated and checked on the host (11976 B, six CPUs, NVRAM proxy); not yet handed to a kernel |
 | XNU kernel | compiles and links on 16.x (14,840,992 B, ARM64 `MH_EXECUTE`, sha256 `8b8c633d…`), merged with the 16.7.16 kexts; not loaded |
 | Prelinked kernel | merged by the kernel job: 9 components, 12,882 rebindings, a sparse prelink index; the tool marks it unqualified and it has not run |
-| XNU entry | blocked on the GICv2 question, not on the kernel |
+| XNU entry | the GICv2 interrupt path exists and boots under QEMU (see "The interrupt controller"); the phone still needs a loader platform and a display driver |
 | Storage driver | written, host-tested, never run on hardware |
 | Root volume and userland | not started |
 
@@ -345,6 +345,40 @@ What the tree does not solve: `intc` describes a real GICv2 while ArmCpu's inter
 GICv3-only (blocker 2), PSCI is the MSM8992 subset without SYSTEM_OFF/SYSTEM_RESET
 (blocker 4), and no display node is emitted because there is no MDSS driver to match it.
 
+## The interrupt controller (GICv2)
+
+The Lumia's controller is a GIC-400: GICv2, memory-mapped, with no redistributors. The
+HackiOS kernel's driver (`osfmk/arm64/gic_v3_irq.c`) was GICv3-only — the CPU interface
+through the `ICC_*_EL1` system registers and one redistributor frame per core — so a GICv2
+machine had no timer, no inter-processor signal and no SPI. That is the change carried as
+`ci/hackios-gic-v2.patch`:
+
+| Part | What it does |
+| --- | --- |
+| Version | Reads `compatible` (`arm,gic-2`, `arm,gic-400`, `arm,gic-v3`) and checks it against `GICD_PIDR2`; the second `reg` window is the redistributor frames on a v3 and the CPU interface on a v2 |
+| Per-CPU | GICv2: banked distributor registers for SGIs and the timer, `GICC_CTLR`/`PMR`/`BPR` for the interface. GICv3: redistributor frame and `ICC_*_EL1`, unchanged |
+| Groups | A GICv2 with security extensions shows only Group 1 to a non-secure EL1, and only Group 0 to the secure side — which is what a machine with no EL3 is. A probe write to `GICD_IGROUPR` decides, and an interrupt marked with the other group is never delivered |
+| SPIs | `GICD_IROUTER` on a v3, `GICD_ITARGETSR` on a v2; edge/level and priority the same on both |
+| Firmware handover | The timers the firmware ran are stopped and their interrupts cleared before the CPU interface is enabled, because at that point of the start-up the stack an exception would land on is not the kernel's |
+| Loader | A `gic_cpu` field per platform, `GIC2=1 xnuloader/build.sh` for a GICv2 machine, `arm,gic-2` and the GICC base in the device tree, the controller quieted just before the jump |
+| QEMU | `QEMU_GIC_VERSION=2 qemu/run-ios.sh` selects `-M virt,gic-version=2` |
+
+Verified on QEMU's `virt` machine with the same kernel and userland: with
+`QEMU_GIC_VERSION=2` the kernel brings up the timer, takes the touch and display interrupts
+and runs SpringBoard to the lock screen (an earlier run of the same build reached the home
+screen); with `QEMU_GIC_VERSION=3` the boot is the one this port already had. Both were run
+against the images `userland/build.sh` makes and the kernel `xnu-build.sh` links.
+
+```sh
+GIC2=1 xnuloader/build.sh           # the loader for a GICv2 machine (the default build is GICv3)
+QEMU_GIC_VERSION=2 qemu/run-ios.sh  # -M virt,gic-version=2
+```
+
+The phone is not wired to it yet: the loader has no MSM8992 platform entry. Its values are
+already in the ADT generator — distributor `0xf9000000`, CPU interface `0xf9002000`, six
+cores numbered in the second affinity field — so the entry is a table row, not a driver. The
+display remains the blocker in front of anything visible on the phone itself.
+
 ## Blockers
 
 1. **The route is decided and the firmware environment is measured.** The phone boots its
@@ -355,10 +389,14 @@ GICv3-only (blocker 2), PSCI is the MSM8992 subset without SYSTEM_OFF/SYSTEM_RES
    volume-key input, and no `UniXNUDxe` entry: `SplashApp`'s `DiscoverAndBootApp` finds the
    removable-media name. `example = true` stays until the kernel route opens, not because
    the payload is unrun.
-2. **The interrupt controller is GICv2** (`qcom,msm-qgic2`, no redistributors). ArmCpu's GIC
-   path is the generic GICv3 one on every ported board, so interrupts — including the eMMC
-   completion interrupt — are gated on that work. Polling keeps the storage rung moving
-   meanwhile.
+2. **The interrupt controller is GICv2** (`qcom,msm-qgic2`, no redistributors). The HackiOS
+   kernel's interrupt driver now handles both: the version is read from the device tree and
+   checked against `GICD_PIDR2`, the per-CPU bring-up uses the redistributor frames on a v3 and
+   the memory-mapped GICC frame on a v2, and the SPI path targets by `GICD_IROUTER` or by
+   `GICD_ITARGETSR` accordingly. It boots QEMU with `-M virt,gic-version=2` to the lock screen
+   and still boots it with `gic-version=3`; see "The interrupt controller (GICv2)". What is
+   left for the phone is the loader's platform entry — the GIC-400 windows at `0xf9000000` and
+   `0xf9002000` from the ADT — and, as above, a display driver before anything can be seen.
 3. **Display has no native driver.** Lumia950XLPkg says its framebuffer depends on the stock
    Qualcomm UEFI and that MDP is not fully implemented, so after `ExitBootServices` there is
    no output unless an MSM8992 MDSS driver exists. With no serial console either, this is the
