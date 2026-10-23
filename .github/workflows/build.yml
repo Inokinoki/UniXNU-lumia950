@@ -321,7 +321,19 @@ jobs:
           echo "::error::the kernel step failed for a reason other than the prelink gate"
           exit 1
 
+      - name: Name the first compile error
+        # util.run keeps a command's output in the log file and echoes only its last 30
+        # lines, which are the make recursion and not the cause. The first error line is.
+        if: always()
+        run: |
+          for file in "$UNIXNU_OUT"/*/logs/kernel*.log; do
+            [ -f "$file" ] || continue
+            echo "== $file"
+            grep -n -m 5 -E 'error:|fatal error' "$file" || echo "no error line in $file"
+          done
+
       - name: Record what the driver compiled against
+        if: always()
         run: |
           find "$UNIXNU_OUT" \( -name 'libNativeSdhci.a' -o -name 'libNativeLegacyDisplay.a' \) \
             -exec shasum -a 256 {} \;
@@ -330,6 +342,9 @@ jobs:
 
 
       - uses: actions/upload-artifact@v4
+        # always(): the compile log is what a failed run has to hand over, and every
+        # step after the failing one is skipped by default.
+        if: always()
         with:
           name: lumia950-native-sdhci
           path: |
@@ -337,7 +352,7 @@ jobs:
             out/*/tree/build/native-legacy-display/**
             out/*/logs/**
             kernel.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Remove fetched sources
