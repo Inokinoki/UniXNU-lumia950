@@ -1,8 +1,8 @@
 diff --git a/DarwinBootPkg/Driver/DarwinBoot.c b/DarwinBootPkg/Driver/DarwinBoot.c
-index 25ce2d2..dbf3f48 100644
+index 25ce2d2..4cec231 100644
 --- a/DarwinBootPkg/Driver/DarwinBoot.c
 +++ b/DarwinBootPkg/Driver/DarwinBoot.c
-@@ -452,6 +452,99 @@ AllocateWindow (KERNEL *Kernel, UINT64 WindowSize, EFI_PHYSICAL_ADDRESS *Address
+@@ -452,6 +452,97 @@ AllocateWindow (KERNEL *Kernel, UINT64 WindowSize, EFI_PHYSICAL_ADDRESS *Address
    return Status;
  }
  
@@ -79,8 +79,7 @@ index 25ce2d2..dbf3f48 100644
 +    if (!EFI_ERROR (ReadFile (Other, Path, SIZE_128MB, Data, Size))) {
 +      (*Root)->Close (*Root);
 +      *Root = Other;
-+      Print (L"DARWINBOOT: payload from another volume (%lu of %lu)
-+", (UINT64)(Index + 1), (UINT64)Count);
++      Print (L"DARWINBOOT: payload from another volume (%lu of %lu)\n", (UINT64)(Index + 1), (UINT64)Count);
 +      break;
 +    }
 +
@@ -89,8 +88,7 @@ index 25ce2d2..dbf3f48 100644
 +
 +  FreePool (Handles);
 +  if (*Data == NULL) {
-+    Print (L"DARWINBOOT: payload not on any of %lu volume(s)
-+", (UINT64)(Scanned + 1));
++    Print (L"DARWINBOOT: payload not on any of %lu volume(s)\n", (UINT64)(Scanned + 1));
 +    (*Root)->Close (*Root);
 +    *Root = NULL;
 +    return EFI_NOT_FOUND;
@@ -102,7 +100,7 @@ index 25ce2d2..dbf3f48 100644
  STATIC
  EFI_STATUS
  EFIAPI
-@@ -461,7 +554,6 @@ Boot (
+@@ -461,7 +552,6 @@ Boot (
    )
  {
    EFI_STATUS                      Status;
@@ -110,7 +108,7 @@ index 25ce2d2..dbf3f48 100644
    EFI_FILE_PROTOCOL               *Root;
    VOID                            *Image;
    VOID                            *Tree;
-@@ -533,11 +625,7 @@ Boot (
+@@ -533,11 +623,7 @@ Boot (
    Map = NULL;
    Address = 0;
    Capacity = 0;
