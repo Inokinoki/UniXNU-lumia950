@@ -95,7 +95,9 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | UniXNU menu | drawn on the 1440x2560 panel in the portrait card layout, three action entries, volume keys move the selection; touch is not consumed |
 | DarwinBoot | `DarwinBoot.efi` builds standalone from its DSC; not yet loaded |
 | ADT | generated and checked on the host (11976 B, six CPUs, NVRAM proxy); not yet handed to a kernel |
-| XNU entry | blocked on the kernel line and the GICv2 question |
+| XNU kernel | compiles and links on 16.x (14,840,992 B, ARM64 `MH_EXECUTE`, sha256 `8b8c633d…`), merged with the 16.7.16 kexts; not loaded |
+| Prelinked kernel | merged by the kernel job: 9 components, 12,882 rebindings, a sparse prelink index; the tool marks it unqualified and it has not run |
+| XNU entry | blocked on the GICv2 question, not on the kernel |
 | Storage driver | written, host-tested, never run on hardware |
 | Root volume and userland | not started |
 
@@ -115,6 +117,7 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | ADT generator and checker | `python3 scripts/make-lumia950-adt.py --dram-size 0xC0000000 --unique-chip-id ... --chip-id 0x8015` then `python3 scripts/check-adt.py build/lumia950.adt` | 11976-byte tree with 6 CPUs accepted; the checker's `--self-test` rejects 7 deliberate defects, including a broken NVRAM Adler-32 |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
 | XNU kernel link | same run | links with the board archives |
+| Kernelcache merge | `kernel` job, [run 39973639606](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39973639606) | 9 components, 12,882 rebindings, 56,127,488-byte arm64 `MH_EXECUTE` (sha256 `5ccf511d…`), sparse index of 9 headers; the tool marks it unqualified |
 
 The driver's *kernel* half (`NativeSdhci.cpp`) compiles against the recorded kernel ABI,
 and the archive holds `NativeSdhci.o` and `SdhciCore.o`, both ARM64 `MH_OBJECT`; the
@@ -127,48 +130,66 @@ is referenced even with the display provider unselected. `drivers/NativeLegacyDi
 defines both probe entry points and does nothing else — no framebuffer, no provider — and
 the defconfig force-loads it through the kernel script's `XNU_EXTRA_LD_ARCHIVES` hook.
 
-Prelink is paused on the merge tool, not on the kernel. The 16.x kernel builds and links in
-CI, but NativePrelink's kit patches are named for `xnu-10063.141.1`, so nothing merges it
-with the kexts of the 16.7.16 kernelcache yet, and the board does not pin that kernelcache's
-hash. The candidate produced while the pin was 17.x (12 components) answered the tool and
-not the requirement: those kexts belong to a different XNU ABI.
+The merge is part of the build. `[kernel.prelink]` names the unstripped 16.x image, pins
+the arm64 kernelcache of 16.7.16 (50,937,856 B out of `kernelcache.release.iphone10b`,
+sha256 `2ec297ba…`) and lists the components this port takes from the cache instead of from
+source: APFS, its decmpfs provider, the storage stack and corecrypto. The slide is measured,
+not guessed: the native `__PRELINK_TEXT` is at `0xfffffff004004000` and the cache's at
+`0xfffffff004dc8000`, so `-0xdc4000` maps the four coalesced ranges 4K aligned to the base of
+the 48 MiB kext window, clear of every native segment and below `__TEXT` at
+`0xfffffff007004000`.
+
+The closure also carries what those declare as libraries — AppleEffaceableStorage,
+CoreAnalyticsFamily, IOCryptoAcceleratorFamily, AppleImage4, CoreTrust — which are
+Apple-SoC-adjacent and have no node in the ADT; they stay unstarted. `com.apple.kec.Libm` is
+deliberately out: nothing selected depends on it, and its 16.7.16 `__text` embeds a constant
+table the prelink's instruction inventory does not recognise and refuses to copy.
+`early_security_init` is out too until an AMFI initializer address for this cache is
+qualified; an unqualified address is worse than none.
 
 The kernel is on 16.x now. `feeds.toml` pins `xnu-8796.141.3` — a source of the same name
 replaces the base repository's 17.x entry — and `patches/xnu-8796/` is that line's overlay.
-Of the 54 base patches, 47 apply unchanged; five are replaced by their 8796 form (the
+Of the 54 base patches, 42 apply unchanged and five are replaced by their 8796 form (the
 non-Apple tunables guards, the external archive hook, the machine layer, the native AES
-personalities and the 64-bit physical address shift); six are added: `clang-trivial-auto-var-init`,
-because 16.x passes a clang flag the runner's clang no longer knows; `clang-uio-stackbuf`,
-which declares the uio stack buffer the way later XNU lines do, because current clang rejects an
-array of a one-byte type carrying an eight-byte alignment, which is what every `bsd/` call site
-used to say; and `driverkit-rpc-kernel-content`, which keeps the kernel `IORPCMessage` in the rpc
-because the runner's `iig` generates DriverKit dispatch code that reads it instead of deriving the
-message from the mach header; and `restore-arm64-kpc`, which restores `osfmk/arm64/kpc.c` from
-`xnu-10063.141.1` because this line's file list builds it and its source drop does not publish it —
-on a non-Apple SoC the file takes its own not-implemented branch; and `compile-records`, which makes
-the compile rules write the per-object JSON records the archive builders read to reuse this kernel's
-exact flags, which this line does not write but the 17.x line's tooling expects; and
-`pmap-pending-preemption`, which defines the debug pmap's preemption question in the arm pmap
-this tree has, because its arm64 home is not published; and `skip.txt` names the seven this line
-has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, no
-exclave owner chain, no boot-progress console. NativePrelink's kit patches carry their
-line in the file name, so 8796 does not take them. The build prints every skip and refuses
-a skip list that names a patch the base tree no longer has, so an omission cannot become a
-silent hole. `[kernel.prelink]` stays out until NativePrelink takes this line and the board
-pins the kernelcache hash.
+personalities and the 64-bit physical address shift); nine overlay-only patches are added. Six answer this line's
+sources, the current clang or the runner's `iig`: `clang-trivial-auto-var-init`, because 16.x
+passes a clang flag the runner's clang no longer knows; `clang-uio-stackbuf`, which declares
+the uio stack buffer the way later XNU lines do, because current clang rejects an array of a
+one-byte type carrying an eight-byte alignment, which is what every `bsd/` call site used to
+say; `driverkit-rpc-kernel-content`, which keeps the kernel `IORPCMessage` in the rpc because
+the runner's `iig` generates DriverKit dispatch code that reads it instead of deriving the
+message from the mach header; `restore-arm64-kpc`, which restores `osfmk/arm64/kpc.c` from
+`xnu-10063.141.1` because this line's file list builds it and its source drop does not publish
+it — on a non-Apple SoC the file takes its own not-implemented branch; `compile-records`,
+which makes the compile rules write the per-object JSON records the archive builders read to
+reuse this kernel's exact flags, which this line does not write but the 17.x line's tooling
+expects; and `pmap-pending-preemption`, which defines the debug pmap's preemption question in
+the arm pmap this tree has, because its arm64 home is not published. Three answer the merge:
+`native-prelink-sparse-index` and `native-prelink-security-init` are NativePrelink's two ABI
+patches, which the kit publishes only for 10063 and which add the sparse-index ABI the tool
+checks for and the early-initializer marker it uses when one is configured; and
+`vfs-getvfs-with-vfsops` adds the one symbol the 16.7.16 APFS imports that the published
+source lacks — the cache reports `xnu-8796.142.1.703.8`, which Apple has not published, and
+the function is 10063's, unchanged. `skip.txt` names the seven this line has no mechanism
+for, each with its reason: no page-guard zones, no SPTM pmap, no exclave owner chain, no
+boot-progress console. The build prints every skip and refuses a skip list that names a
+patch the base tree no longer has, so an omission cannot become a silent hole.
 
-The 16.x kernel builds and links. Run
-[39890935817](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39890935817)
-compiled all five components, wrote the compile records, built all six archives, and linked
-`mach.development.bcm2837` with `NativeSdhci` and the display stub force-loaded. The image
-is a 14,840,680-byte ARM64 `MH_EXECUTE` with 25 load commands
-(sha256 `bdf3a3ec171b8304d57fda56b05d9c51573dc56f6644b4d9849332e6be2bf06c`) and ships in the
-job's artifact. Its only stop is the board's missing `[kernel.prelink]`, which the workflow
-tolerates by name. Six
-stops stood in front of that, one per addition above: the annotated tag pinned as a commit,
-the clang flag this line passes and the runner's clang rejects, the aligned-char uio stack
-buffer, the `iig`-generated DriverKit dispatch, the omitted `osfmk/arm64/kpc.c`, the missing
-compile records and the unpublished debug pmap hook. A failed run hands over
+The 16.x kernel builds, links and merges. Run
+[39973639606](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39973639606)
+compiled all five components, wrote the compile records, built all six archives, linked
+`mach.development.bcm2837` (14,840,992 B, sha256 `8b8c633d…`) with `NativeSdhci` and the
+display stub force-loaded, then merged it with the pinned kernelcache into a
+56,127,488-byte ARM64 `MH_EXECUTE` with 25 load commands and a 9-entry sparse index
+(sha256 `5ccf511d93986ddff5f7d74880b096f980081b7d5ba3fb10d2dc15325cb3cb58`): 9
+components, 7 kernel interfaces, 12,882 rebindings. Both images and the report ship in the
+`lumia950-kernel` artifact; the job parses the candidate and its report rather than trusting
+the exit status.
+
+Seven stops stood in front of that, one per addition above: the annotated tag pinned as a
+commit, the clang flag this line passes and the runner's clang rejects, the aligned-char uio
+stack buffer, the `iig`-generated DriverKit dispatch, the omitted `osfmk/arm64/kpc.c`, the
+missing compile records and the unpublished debug pmap hook. A failed run hands over
 `out/<device>/logs/`: the step uploads it and greps for `error:` because the driver echoes
 only the last thirty lines of a command.
 
@@ -181,7 +202,7 @@ only the last thirty lines of a command.
 | Why this release | iOS 16 is the requirement, and 16.7.16 is the last 16.x release and the one the community ports reached userland with |
 | Why iPhone10,6 | the phone-shaped identity in a restore that serves iPhone10,3 and iPhone10,6; both use `kernelcache.release.iphone10b` |
 | How it was checked | product, version, build, device class, chip `0x8015` and board `0x0e` were read from the image's own `BuildManifest.plist` over HTTP range requests |
-| What is not pinned | the kernelcache hash, because nothing consumes the cache until a 16.x kernel route exists; `[kernel.prelink]` returns with that hash |
+| What is pinned | the arm64 slice of the `KernelCache` IM4P after LZFSE decoding: 50,937,856 bytes, sha256 `2ec297bac95bcba01046fd0148e97e7e5885c05a6c18827f39f534ba375c1221`; `[kernel.prelink]` refuses any other cache |
 
 ## Layout
 
@@ -359,7 +380,7 @@ not have either, so this repository carries
 | --- | --- | --- | --- |
 | `validate` | `ubuntu-latest` | every push and pull request | parses `board.toml` and the defconfig, compiles and runs the core test, checks that the build driver accepts the board, and that the `example` guard still refuses to build |
 | `payload` | `ubuntu-latest` | manual, `target=payload` (the default) | installs clang, lld and the EDK II host tools, clones Mu_Basecore, builds `UniXNU.efi` and `DarwinBoot.efi`, stages `out/payload` and checks it |
-| `kernel` | `macos-latest` | manual, `target=kernel` | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, and links |
+| `kernel` | `macos-latest` | manual, `target=kernel` | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, links, and merges the image with the pinned kernelcache |
 
 UniXNU's 16.x support travels as `ci/unixnu-16x.patch`: the overlay and the per-line patch
 selection belong in UniXNU, but this account cannot push to `UniXNU/UniXNU`. Both CI jobs
@@ -367,12 +388,12 @@ apply the shim to their checkout and treat an already-applied shim as a no-op, s
 the change is upstream the shim can be deleted without touching the jobs. The build driver
 still comes from UniXNU `main`; only the patch selection and its overlay are carried.
 
-The `kernel` job compiles and links the 16.x source line, then stops at the prelink gate
-because the board has no `[kernel.prelink]`. That one stop is tolerated and every other
-failure fails the job, so the archives, the link and the kernel image stay verified. The
-image travels in the job's artifact beside the archives and their logs. When NativePrelink
-takes this line and the board pins the kernelcache hash, the prelink section returns and the
-gate goes away.
+The `kernel` job compiles and links the 16.x source line, then merges the image with the
+pinned 16.7.16 kernelcache through `[kernel.prelink]`. Every stop fails the job: there is no
+gate left to tolerate. The job proves the merge rather than trusting its exit status — the
+output is parsed as a Mach-O, and the report must name components, rebindings and sparse
+index entries. The image, the prelinked candidate, the report and every log travel in the
+`lumia950-kernel` artifact.
 
 That job is the first real test of `NativeSdhci.cpp`: it compiles with `-Wall -Wextra
 -Werror` against the recorded kernel ABI and asserts the object is an ARM64 `MH_OBJECT`.
