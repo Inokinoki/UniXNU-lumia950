@@ -137,8 +137,9 @@ The kernel is on 16.x now. `feeds.toml` pins `xnu-8796.141.3` — a source of th
 replaces the base repository's 17.x entry — and `patches/xnu-8796/` is that line's overlay.
 Of the 54 base patches, 47 apply unchanged; five are replaced by their 8796 form (the
 non-Apple tunables guards, the external archive hook, the machine layer, the native AES
-personalities and the 64-bit physical address shift); and `skip.txt` names the seven this
-line has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, no
+personalities and the 64-bit physical address shift); one is added because 16.x passes a
+clang flag the runner's clang no longer knows; and `skip.txt` names the seven this line
+has no mechanism for, each with its reason: no page-guard zones, no SPTM pmap, no
 exclave owner chain, no boot-progress console. NativePrelink's kit patches carry their
 line in the file name, so 8796 does not take them. The build prints every skip and refuses
 a skip list that names a patch the base tree no longer has, so an omission cannot become a

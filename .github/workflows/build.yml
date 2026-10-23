@@ -109,11 +109,11 @@ jobs:
           for name, reason in skips.items():
               assert (base / f"{name}.patch").is_file(), name
               assert reason, name
-          replaced = {p.stem for p in overlay.glob("*.patch")}
-          for name in replaced:
-              assert (base / f"{name}.patch").is_file(), name
+          names = {p.stem for p in overlay.glob("*.patch")}
+          replaced = {name for name in names if (base / f"{name}.patch").is_file()}
+          added = names - replaced
           assert not replaced & set(skips), replaced & set(skips)
-          print(f"{line}: {len(replaced)} replaced, {len(skips)} skipped")
+          print(f"{line}: {len(replaced)} replaced, {len(added)} added, {len(skips)} skipped")
           PY
 
       - name: Check the build scripts
