@@ -25,7 +25,7 @@ index dd8667b..a9896b3 100755
    -drive if=pflash,format=raw,readonly=on,file="$EFI" \
    -drive if=pflash,format=raw,file=vars.fd \
 diff --git a/xnu/files/osfmk/arm64/gic_v3_irq.c b/xnu/files/osfmk/arm64/gic_v3_irq.c
-index 63ffd4b..a344e00 100644
+index 63ffd4b..2fdc7f9 100644
 --- a/xnu/files/osfmk/arm64/gic_v3_irq.c
 +++ b/xnu/files/osfmk/arm64/gic_v3_irq.c
 @@ -1,12 +1,17 @@
@@ -121,15 +121,35 @@ index 63ffd4b..a344e00 100644
  
  /*
   * Acknowledged, not yet EOI'd; 0: none. The signal between processors is interrupt 0 and reads
-@@ -119,6 +153,7 @@ uint64_t gic_v3_spi_count(uint32_t intid);
+@@ -119,6 +153,27 @@ uint64_t gic_v3_spi_count(uint32_t intid);
  void gic_v3_irq_cpu_shutdown(void);
  void gic_v3_irq_signal(uint32_t phys_id);
  void gic_v3_irq_signal_stop(uint32_t phys_id);
 +static void gic_v2_group(uint32_t word, uint32_t mask);
++
++/* Is one of the names in a device tree compatible list (NUL-terminated strings, back to back)? */
++static bool
++gic_compatible_has(char const *list, unsigned int size, char const *name)
++{
++	size_t len = strlen(name);
++
++	for (unsigned int off = 0; off < size && list[off] != '\0'; ) {
++		unsigned int end = off;
++
++		while (end < size && list[end] != '\0') {
++			end++;
++		}
++		if (end - off == len && strncmp(list + off, name, len) == 0) {
++			return true;
++		}
++		off = end + 1;
++	}
++	return false;
++}
  
  static inline uint32_t
  gic_read32(vm_offset_t addr)
-@@ -135,22 +170,45 @@ gic_write32(vm_offset_t addr, uint32_t value)
+@@ -135,22 +190,45 @@ gic_write32(vm_offset_t addr, uint32_t value)
  static void
  gic_mask(uint32_t intid)
  {
@@ -177,7 +197,7 @@ index 63ffd4b..a344e00 100644
  	uint64_t aff0 = phys_id & 0xff, aff1 = (phys_id >> 8) & 0xff;
  
  	__builtin_arm_wsr64("ICC_SGI1R_EL1", ((uint64_t)sgi << 24) | (aff1 << 16) | (1ULL << (aff0 & 15)));
-@@ -193,6 +251,9 @@ gic_spi_handle(uint32_t intid)
+@@ -193,6 +271,9 @@ gic_spi_handle(uint32_t intid)
  static void
  gic_distributor_settle(void)
  {
@@ -187,7 +207,7 @@ index 63ffd4b..a344e00 100644
  	while (gic_read32(gicd_base + GICD_CTLR) & GICD_CTLR_RWP) {
  		/* wait for the change to take effect */
  	}
-@@ -254,13 +315,22 @@ gic_v3_spi_attach(uint32_t intid, bool edge, void (*handler)(void *context, uint
+@@ -254,13 +335,22 @@ gic_v3_spi_attach(uint32_t intid, bool edge, void (*handler)(void *context, uint
  	gic_v3_spi_mask(intid);
  	gic_write32(gicd_base + GICD_ICPENDR(intid / 32), 1u << (intid % 32));
  	gic_write32(gicd_base + GICD_ICACTIVER(intid / 32), 1u << (intid % 32));
@@ -214,7 +234,7 @@ index 63ffd4b..a344e00 100644
  	gic_distributor_settle();
  	gic_v3_spi_unmask(intid);
  	return KERN_SUCCESS;
-@@ -296,14 +366,31 @@ gic_v3_spi_count(uint32_t intid)
+@@ -296,14 +386,31 @@ gic_v3_spi_count(uint32_t intid)
  	return 0;
  }
  
@@ -248,7 +268,7 @@ index 63ffd4b..a344e00 100644
  
  		if (intid >= GIC_INTID_SPURIOUS_MIN) {
  			break;
-@@ -328,8 +415,7 @@ gic_irq_handler(__unused void *target, __unused void *refCon, __unused void *nub
+@@ -328,8 +435,7 @@ gic_irq_handler(__unused void *target, __unused void *refCon, __unused void *nub
  			gic_last_unhandled = intid;
  		}
  
@@ -258,7 +278,7 @@ index 63ffd4b..a344e00 100644
  		gic_active_iar[cpu] = 0;
  	}
  }
-@@ -358,12 +444,30 @@ gic_v3_irq_quiesce(void)
+@@ -358,12 +464,30 @@ gic_v3_irq_quiesce(void)
  		}
  	}
  	if (gic_active_iar[cpu] != 0) {
@@ -291,7 +311,7 @@ index 63ffd4b..a344e00 100644
  /*
   * This processor is leaving for good: the firmware is about to be asked to switch it off
   * (psci_smp_cpu_off(), and the boot processor in the loader's stub when the kernel has a core of
-@@ -376,19 +480,16 @@ gic_v3_irq_quiesce(void)
+@@ -376,19 +500,16 @@ gic_v3_irq_quiesce(void)
  void
  gic_v3_irq_cpu_shutdown(void)
  {
@@ -316,7 +336,7 @@ index 63ffd4b..a344e00 100644
  	__builtin_arm_isb(ISB_SY);
  }
  
-@@ -412,43 +513,13 @@ gic_find_redistributor(void)
+@@ -412,43 +533,13 @@ gic_find_redistributor(void)
  	panic("gic: no redistributor for MPIDR 0x%llx", mpidr);
  }
  
@@ -343,8 +363,7 @@ index 63ffd4b..a344e00 100644
 -		}
 -		uint64_t const *reg = prop;
 -		vm_offset_t soc_base = pe_arm_get_soc_base_phys();
-+	vm_offset_t gicr = gic_find_redistributor();
- 
+-
 -		simple_lock_init(&gic_spi_lock, 0);
 -		gicd_base = ml_io_map(soc_base + reg[0], reg[1]);
 -		gicr_base = ml_io_map(soc_base + reg[2], reg[3]);
@@ -359,13 +378,14 @@ index 63ffd4b..a344e00 100644
 -	/* System-register CPU interface */
 -	__builtin_arm_wsr64("ICC_SRE_EL1", __builtin_arm_rsr64("ICC_SRE_EL1") | 1);
 -	__builtin_arm_isb(ISB_SY);
--
++	vm_offset_t gicr = gic_find_redistributor();
+ 
 -	gicr = gicr_cpu_base[cpu] = gic_find_redistributor();
 +	gicr_cpu_base[cpu] = gicr;
  
  	uint32_t waker = gic_read32(gicr + GICR_WAKER);
  	if (waker & (GICR_WAKER_PROCSLEEP | GICR_WAKER_CHILDASLEEP)) {
-@@ -500,9 +571,179 @@ gic_v3_irq_cpu_init(void)
+@@ -500,9 +591,183 @@ gic_v3_irq_cpu_init(void)
  	__builtin_arm_wsr64("ICC_IGRPEN1_EL1", 1);
  	__builtin_arm_isb(ISB_SY);
  
@@ -489,10 +509,14 @@ index 63ffd4b..a344e00 100644
 +		if (SecureDTGetProperty(entry, "compatible", (void const **)&compatible, &compatible_size) != kSuccess) {
 +			compatible = NULL;
 +		}
-+		/* "arm,gic-400" is a GICv2 too, and is what a Snapdragon's device tree calls it */
-+		bool says_v2 = compatible != NULL && (strncmp(compatible, "arm,gic-2", 9) == 0 ||
-+		    strncmp(compatible, "arm,gic-400", 11) == 0);
-+		bool says_v3 = compatible != NULL && strncmp(compatible, "arm,gic-v3", 10) == 0;
++		/*
++		 * The whole list, not just its first name: a Snapdragon's node says
++		 * "qcom,msm-qgic2", "arm,gic-2", and "arm,gic-400" is a GICv2 as well.
++		 */
++		bool says_v2 = compatible != NULL && (gic_compatible_has(compatible, compatible_size, "arm,gic-2") ||
++		    gic_compatible_has(compatible, compatible_size, "arm,gic-400") ||
++		    gic_compatible_has(compatible, compatible_size, "qcom,msm-qgic2"));
++		bool says_v3 = compatible != NULL && gic_compatible_has(compatible, compatible_size, "arm,gic-v3");
 +
 +		kprintf("gic: compatible \"%s\", PIDR2 revision %u, second region %llx/%llx\n",
 +		    compatible ? compatible : "(none)", pidr2, reg[2], reg[3]);
@@ -560,7 +584,7 @@ index d2a3129..2c4a8de 100755
  # is in the middle of the phone's largest block of RAM, which XNU needs in one piece.
  lld-link /subsystem:efi_application /entry:efi_main /nodefaultlib /base:0xA1000000 /out:loader.efi loader.obj
 diff --git a/xnuloader/loader.c b/xnuloader/loader.c
-index c31969c..3375803 100644
+index c31969c..0e51514 100644
 --- a/xnuloader/loader.c
 +++ b/xnuloader/loader.c
 @@ -517,6 +517,7 @@ struct platform {
@@ -645,13 +669,21 @@ index c31969c..3375803 100644
          "  ldr x9, [x10, #328]\n msr s3_3_c4_c4_0, x9\n"
          "  ldr x9, [x10, #336]\n msr s3_3_c4_c4_1, x9\n"
          "  ldr x9, [x10, #104]\n msr cntkctl_el1, x9\n"
-@@ -3245,8 +3283,12 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
+@@ -3245,8 +3283,20 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
  	}
  	dt_begin(&w, "gic");
  	dt_prop_str(&w, "device_type", "interrupt-controller");
 -	dt_prop_str(&w, "compatible", "arm,gic-v3");
 -	uint64_t gic_reg[4] = { plat->gic_dist - plat->io_base, 0x10000, plat->gic_redist - plat->io_base, 0x100000 };
-+	dt_prop_str(&w, "compatible", plat->gic_cpu ? "arm,gic-2" : "arm,gic-v3");
++	/* A Snapdragon names its controller "qcom,msm-qgic2" first and "arm,gic-2" after it, and the
++	 * phone's own ADT says exactly that; write the same list so this machine takes the same path
++	 * through the kernel's driver as the phone does. */
++	if (plat->gic_cpu) {
++		dt_prop(&w, "compatible", "qcom,msm-qgic2\0arm,gic-2",
++		    (uint32_t)sizeof("qcom,msm-qgic2\0arm,gic-2"));
++	} else {
++		dt_prop_str(&w, "compatible", "arm,gic-v3");
++	}
 +	/* second region: the redistributor frames (v3) or the CPU interface (v2); the kernel reads
 +	 * GICD_PIDR2 to know which of the two it is */
 +	uint64_t gic_reg[4] = { plat->gic_dist - plat->io_base, 0x10000,
@@ -660,7 +692,7 @@ index c31969c..3375803 100644
  	dt_prop(&w, "reg", gic_reg, sizeof(gic_reg));
  	dt_end(&w);
  	if (plat->uart != 0) {
-@@ -3273,6 +3315,7 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
+@@ -3273,6 +3323,7 @@ run_kernel(int have_checkpoint, uint64_t checkpoint)
  	}
  	print("jumping to %x\n", entry_va + slide);
  	flush_log();
