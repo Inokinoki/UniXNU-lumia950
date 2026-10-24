@@ -68,11 +68,16 @@ jobs:
           keys = [line.split("=", 1)[0].strip() for line in config
                   if line.strip() and not line.startswith("#")]
           assert "CONFIG_XNU_NATIVE_SDHCI" in keys, keys
+          assert "CONFIG_XNU_NATIVE_ADRENO418" in keys, keys
           assert "CONFIG_XNU_BUILD_ARCHIVES" in keys, keys
           assert "CONFIG_XNU_EXTRA_LD_ARCHIVES" in keys, keys
           archives = board["kernel"]["archives"]
           assert "build-arm-driver.py NativeLegacyDisplay" in archives, archives
           assert pathlib.Path("drivers/NativeLegacyDisplay/NativeLegacyDisplay.cpp").is_file()
+          # The GPU driver is built from the same list, and its personality and ADT
+          # node are only meaningful together with the archive.
+          assert "build-arm-driver.py NativeAdreno418" in archives, archives
+          assert pathlib.Path("drivers/NativeAdreno418/Info.plist").is_file()
           ipsw = board["ipsw"]
           assert ipsw["url"].startswith("https://updates.cdn-apple.com/"), ipsw["url"]
           assert ipsw["version"].startswith("16."), ipsw  # the port stays on 16.x
@@ -134,6 +139,7 @@ jobs:
         run: |
           python3 -m py_compile scripts/build-arm-driver.py scripts/ci-clear-example.py scripts/check-payload.py \
               scripts/get-ntfs-driver.py scripts/make-lumia950-adt.py scripts/check-adt.py \
+              scripts/check-gpu-addon.py scripts/check-screenshot.py scripts/panel.py \
               scripts/stage-kernel.py
           bash -n scripts/build-payload.sh
 
@@ -192,14 +198,31 @@ jobs:
               --owned-memory-size 0x20000000
           python3 scripts/check-adt.py build/lumia950.adt
           python3 scripts/check-adt.py --self-test
+          # The GPU node is the only thing that makes the driver matchable. The
+          # checker above rejects a wrong shape; this proves the node is there at
+          # all, in the tree the phone is given.
+          grep -qa "kgsl@fdb00000" build/lumia950.adt
 
-      - name: Host test of the driver core
+      - name: Host tests of the driver cores
         run: |
           mkdir -p build
           g++ -std=c++17 -Wall -Wextra -Werror -I drivers/NativeSdhci \
               drivers/NativeSdhci/Test/check-sdhci-core.cpp \
               drivers/NativeSdhci/SdhciCore.cpp -o build/check-sdhci-core
           ./build/check-sdhci-core
+          g++ -std=c++17 -Wall -Wextra -Werror -I drivers/NativeAdreno418 \
+              drivers/NativeAdreno418/Test/check-adreno-core.cpp \
+              drivers/NativeAdreno418/AdrenoCore.cpp \
+              drivers/NativeAdreno418/IommuCore.cpp \
+              drivers/NativeAdreno418/CommandStream.cpp -o build/check-adreno-core
+          ./build/check-adreno-core
+
+      - name: The GPU addon checker rejects what the phone would choke on
+        # Rung 6 hands the Metal plugin over as one blob. This repository does not write
+        # that format, so the only thing it can prove here is that a blob is read the way
+        # the kernel reads it and that the plugin inside was built for iOS 16: the one
+        # published for this GPU targets 17, and that failure is silent on the phone.
+        run: python3 scripts/check-gpu-addon.py --self-test
 
       - name: The build driver accepts this board
         run: |
@@ -207,6 +230,7 @@ jobs:
           python3 unixnu defconfig lumia950_defconfig -D "$GITHUB_WORKSPACE"
           python3 unixnu status -D "$GITHUB_WORKSPACE" | tee status.txt
           grep -q "driver   NativeSdhci              device" status.txt
+          grep -q "driver   NativeAdreno418          device" status.txt
 
       - name: The incomplete-board guard still holds
         run: |

@@ -27,6 +27,9 @@ try:
 except ModuleNotFoundError:  # 3.11+
     sys.exit("python3.11 or newer is required (tomllib)")
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import panel  # noqa: E402  (the panel geometry, shared with check-screenshot.py)
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CONFIG_RELATIVE = pathlib.Path("payload/EFI/UniXNU/unixnu.toml")
 # UNIXNU_CONFIG_DIR in Config.c: every path in the file is relative to this directory.
@@ -252,14 +255,15 @@ def main() -> int:
     parser.add_argument("--payload-files", type=pathlib.Path,
                         help="second staged tree that carries the payload files, for a kernel on "
                              "MainOS; a name this tree lacks has to exist in that one")
-    parser.add_argument("--panel", default="1440x2560",
-                        help="panel in pixels, for the layout report (default: the Lumia 950's)")
+    parser.add_argument("--panel", default=panel.describe(panel.PANEL),
+                        help="panel in pixels, for the layout report "
+                             f"(default: this board's, {panel.describe(panel.PANEL)})")
     args = parser.parse_args()
 
     try:
-        width, height = (int(part) for part in args.panel.lower().split("x", 1))
-    except ValueError:
-        parser.error(f"--panel takes WIDTHxHEIGHT, not {args.panel!r}")
+        width, height = panel.parse(args.panel)
+    except ValueError as error:
+        parser.error(str(error))
 
     report = Report()
     root = check_config(args.config, (width, height), report)

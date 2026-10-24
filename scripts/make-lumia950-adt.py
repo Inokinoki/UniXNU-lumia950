@@ -30,6 +30,10 @@ README.md and from the MSM8992 descriptions used by mainline Linux. What is
     SYSTEM_OFF and no SYSTEM_RESET. See README.md, blocker 4.
   * No display node is emitted: there is no MDSS driver, and a node naming
     hardware no driver understands would be worse than the absence.
+  * The GPU node is emitted because a driver now reads it (`NativeAdreno418`,
+    rung 1). Its window and the MMSS window beside it are from Qualcomm's
+    msm-3.10 device tree, not from mainline: see drivers/NativeAdreno418/
+    BoardConstants.h for the sources of every value.
   * `reg` windows are described, but whether the firmware left them where the
     SoC map says is a question for the driver, not for this file.
 
@@ -56,6 +60,13 @@ GIC_DISTRIBUTOR = (0xF9000000, 0x1000)
 GIC_CPU_INTERFACE = (0xF9002000, 0x1000)
 SDHCI_WINDOWS = ((0xF9824900, 0x1A0), (0xF9824000, 0x800))
 SDHCI_INTERRUPTS = (123, 138)
+# The GPU. Qualcomm's msm-3.10 device tree for this SoC (msm8992-gpu.dtsi and
+# msm-gdsc.dtsi) is the source: kgsl-3d0@0xfdb00000, GIC SPI 33, and the OxiLi
+# power domains in the MMSS clock controller at 0xfd8c0000. The driver maps both
+# windows, so both are reg entries here.
+KGSL_WINDOWS = ((0xFDB00000, 0x40000), (0xFD8C0000, 0x1000))
+KGSL_INTERRUPT = 33
+GPU_CHIP_ID = 0x04010800
 # MPIDR affinity values: two A57 cores in cluster 0, four A53 cores in cluster 1.
 DEFAULT_CPU_REGS = "0,1,0x100,0x101,0x102,0x103"
 NVRAM_BANK_SIZE = 8192
@@ -247,6 +258,17 @@ def build_tree(
             ("clock-frequency", u32(TIMEBASE_FREQUENCY)),
         ],
     )
+    kgsl = node(
+        "kgsl@fdb00000",
+        [
+            ("compatible", string("qcom,kgsl-3d0", "qcom,kgsl-3d")),
+            ("reg", b"".join(u64(address) + u64(size) for address, size in KGSL_WINDOWS)),
+            ("interrupts", u32(0) + u32(KGSL_INTERRUPT) + u32(4)),
+            # The device tree's qcom,chipid: generation 4 (a4xx) is what the
+            # driver's register database and command stream cover.
+            ("chip-id", u32(GPU_CHIP_ID)),
+        ],
+    )
     arm_io = node(
         "arm-io",
         [
@@ -257,7 +279,7 @@ def build_tree(
             # use absolute SoC addresses, so an offset is the address.
             ("ranges", u64(0) + u64(0) + u64(1 << 32)),
         ],
-        [intc, sdhci],
+        [intc, sdhci, kgsl],
     )
 
     children = [

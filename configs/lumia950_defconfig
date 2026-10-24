@@ -8,6 +8,10 @@
 CONFIG_XNU_ARM_DT_PLATFORM=y
 CONFIG_XNU_ARMCPU=y
 CONFIG_XNU_NATIVE_SDHCI=y
+# Rung 1 of the GPU: identity. The archive is built and the personality is
+# documented in README.md, "Linking it into the kernel"; no GPU service is
+# published, so nothing that looks for a Metal device can bind it yet.
+CONFIG_XNU_NATIVE_ADRENO418=y
 
 # ArmCpu is only accepted with the real source crypto provider, and the kernel
 # link expects the namespaced corecrypto archive that the builders above make.

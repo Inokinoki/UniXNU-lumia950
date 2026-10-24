@@ -26,6 +26,10 @@ archives = [
   "build-arm-driver.py ArmDTPlatform",
   "build-arm-driver.py ArmCpu",
   "build-arm-driver.py NativeSdhci",
+  # Rung 1 of the GPU (see README.md, "The GPU"): identity only. It is built so
+  # the archive and the personality cannot drift from the ADT node; it publishes
+  # no GPU service, so linking it changes nothing a client can find.
+  "build-arm-driver.py NativeAdreno418",
   # Link input, not a driver: upstream calls native_legacy_display_probe() from
   # bsd_init.c without the XNU_NATIVE_LEGACY_DISPLAY guard every other call site has,
   # so the kernel needs the symbol even with the flag off. The defconfig force-loads

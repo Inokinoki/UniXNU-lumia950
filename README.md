@@ -168,6 +168,8 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | Prelinked kernel | merged by the kernel job: 9 components, 12,882 rebindings, a sparse prelink index; the tool marks it unqualified and it has not run. The kernel stage takes that image without changing it |
 | XNU entry | the GICv2 interrupt path exists, accepts the ADT's `qcom,msm-qgic2` node and boots under QEMU (see "The interrupt controller"); the phone stages a kernel, its ADT sidecar and the loader entry with `scripts/stage-kernel.py`, so the first flash waits on EL1 and on a display driver |
 | Storage driver | written, host-tested, never run on hardware |
+| GPU (`NativeAdreno418`) | rung 1 of 6 runs: maps the KGSL and MMSS windows, refuses to read a collapsed domain, reads the revision. Rungs 2–4 and the fence half of 5 exist as host-tested cores (`gdscrEnableValue`/`gdscrPollUntilOn`, `IommuCore`, `CommandStream`) and are not wired; rung 6 has a host checker for the addon blob but no plugin built for iOS 16. Built by the archive step, publishes no GPU service, never run on hardware |
+| iOS visual effects | none, and blocked twice over: no display driver (blocker 3) and no Metal device (blocker 7). See "iOS visual effects" |
 | Root volume and userland | not started |
 
 ## What is verified, and how
@@ -175,16 +177,18 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | Check | Command | Result |
 | --- | --- | --- |
 | SDHCI core logic (39 checks) | `scripts\test-core.bat` (Windows) or the `g++` line inside it | all pass |
+| Adreno 418 core logic (162 checks) | same runner: the second block compiles and runs `check-adreno-core` | all pass |
+| GPU addon blob (17 self-test cases) | `python3 scripts/check-gpu-addon.py --self-test` | a coherent blob accepted; a bad signature, a mis-sized header, missing padding, a climbing path, a non-executable probe, an executable plist, a bundle without `Info.plist`, an iOS 17 minimum, a macOS build, a non-Mach-O binary, an entitlements plist under `daemons/`, a bad publish file, a malformed client name and a relative primelist entry all refused |
 | Board and defconfig parse | `unixnu defconfig lumia950_defconfig -D lumia950` | accepted |
-| Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device` |
+| Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device`, `driver NativeAdreno418 device` |
 | Incomplete-board guard | `unixnu build kernel --dry-run -D lumia950` | refused, as designed |
 | CI workflow file | YAML parse, `bash -n` on all 17 run blocks | clean |
 | Chainload payload configuration | `python3 scripts/check-payload.py` | accepted; the keys and enums are the ones `UniXNULib/Config.c` reads |
 | Payload staging | `stage-esp.py` and `check-payload.py --payload-dir` on fixture EFI files | tree staged at `EFI/UniXNU` and accepted |
 | Chainload payload build | `payload` job, [run 39869583766](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39869583766) | `UniXNU.efi` and `BOOTAA64.EFI` 95232 B, `DarwinBoot.efi` 26112 B, config 2119 B; staged tree checked, artifact uploaded |
-| Kernel stage | `python3 scripts/stage-kernel.py --kernel <mach-o> --unique-chip-id … --menu-tree out/payload` | ADT generated (11,932 B, six CPUs) and accepted by `check-adt.py`; config re-read with 4 entries, the kernel first and `default = "xnu"`; a non-`MH_EXECUTE` kernel and a tree missing the `.adt` sidecar are both refused |
+| Kernel stage | `python3 scripts/stage-kernel.py --kernel <mach-o> --unique-chip-id … --menu-tree out/payload` | ADT generated (12,212 B, six CPUs) and accepted by `check-adt.py`; config re-read with 4 entries, the kernel first and `default = "xnu"`; a non-`MH_EXECUTE` kernel and a tree missing the `.adt` sidecar are both refused |
 | On-phone chainload | mass-storage copy of `out/payload/EFI`, BCD `bootsequence` pointed at the `\EFI\boot\BootShim.efi` entry | Lumia splash then the UniXNU menu with three cards; volume keys move the selection (2026-10-23) |
-| ADT generator and checker | `python3 scripts/make-lumia950-adt.py --dram-size 0xC0000000 --unique-chip-id ... --chip-id 0x8015` then `python3 scripts/check-adt.py build/lumia950.adt` | 11976-byte tree with 6 CPUs accepted; the checker's `--self-test` rejects 7 deliberate defects, including a broken NVRAM Adler-32 |
+| ADT generator and checker | `python3 scripts/make-lumia950-adt.py --dram-size 0xC0000000 --unique-chip-id ... --chip-id 0x8015` then `python3 scripts/check-adt.py build/lumia950.adt` | 12256-byte tree with 6 CPUs and the GPU node accepted; the checker's `--self-test` rejects 7 deliberate defects, including a broken NVRAM Adler-32 |
 | Kernel-ABI compile of `NativeSdhci.cpp` | `kernel` job, [run 39858813829](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39858813829) | compiled clean under `-Werror`; archive holds two ARM64 `MH_OBJECT` members |
 | XNU kernel link | same run | links with the board archives |
 | Kernelcache merge | `kernel` job, [run 39973639606](https://github.com/ManGuy-Legend/UniXNU-lumia950/actions/runs/39973639606) | 9 components, 12,882 rebindings, 56,127,488-byte arm64 `MH_EXECUTE` (sha256 `5ccf511d…`), sparse index of 9 headers; the tool marks it unqualified |
@@ -288,10 +292,22 @@ lumia950/
     NativeSdhci.{h,cpp}             IOKit driver: warm handoff, PIO reads
     Info.plist                      personality for `qcom,msm8994-sdhci`
     Test/check-sdhci-core.cpp       host test for the core
+  drivers/NativeAdreno418/          the GPU, bring-up rung 1
+    BoardConstants.h                KGSL, MMSS, SMMU and a4xx registers, each with its source
+    AdrenoCore.{h,cpp}              chipid and GDSCR decoding, the GDSC sequence, CP ring
+                                    arithmetic, the ladder
+    IommuCore.{h,cpp}               ARMv7 short-descriptor page tables for the GPU's SMMU
+    CommandStream.{h,cpp}           PM4 packets, ring pacing, the fence and its wait
+    NativeAdreno418.{h,cpp}         IOKit driver: power gate, revision read, no service published
+    Info.plist                      personality for `qcom,kgsl-3d0`
+    Test/check-adreno-core.cpp      host test for the core
   payload/EFI/UniXNU/unixnu.toml    chainload config, in the layout it deploys as
   scripts/build-arm-driver.py       compile a driver against the recorded XNU ABI
   scripts/build-payload.sh          EDK II build and staging for the two EFI binaries
   scripts/check-payload.py          config and staged-tree check
+  scripts/check-gpu-addon.py        the rung-6 addon blob: layout, bundle, iOS target
+  scripts/check-screenshot.py       a screenshot is this panel or it is not evidence
+  scripts/panel.py                  the panel size, shared by the two above
   scripts/test-core.bat             host test runner (Windows)
 ```
 
@@ -404,8 +420,8 @@ confirmed only structurally: no driver here has consumed one yet.
 
 The generator emits `/chosen` (random seed, CHRP NVRAM proxy, DRAM base and size,
 `osenvironment`, and the `unique-chip-id`/`chip-id` pair), `/cpus` (six cores, boot CPU
-first), `/psci`, `/defaults`, `/options`, `/product`, and `/arm-io` with the GICv2 and SDHCI
-windows. The NVRAM proxy follows the layout
+first), `/psci`, `/defaults`, `/options`, `/product`, and `/arm-io` with the GICv2, SDHCI and
+KGSL windows. The NVRAM proxy follows the layout
 `iokit/Kernel/IONVRAMCHRPHandler.cpp` parses, down to the Adler-32 it panics on, and the
 checker recomputes that checksum rather than trusting the generator. `unique-chip-id` and
 `chip-id` are required because anything calling `gethostuuid()` blocks forever without them;
@@ -414,6 +430,166 @@ the checker refuses a tree that omits them unless explicitly told to allow it.
 What the tree does not solve: `intc` describes a real GICv2 while ArmCpu's interrupt path is
 GICv3-only (blocker 2), PSCI is the MSM8992 subset without SYSTEM_OFF/SYSTEM_RESET
 (blocker 4), and no display node is emitted because there is no MDSS driver to match it.
+
+## The GPU (Adreno 418)
+
+MSM8992's GPU is an **Adreno 418**, an a4xx part, and the generation decides everything here.
+Upstream's [Adreno 740 driver](../unixnu/docs/drivers/native-adreno.md) drives a6xx/a7xx
+silicon: a GMU that boots firmware and owns power, a shared 4 KiB SMMU through `ArmSmmu4K`,
+and a command stream from `AdrenoPM4` whose state packets are the ones A6xx and later take.
+a4xx has no GMU, its own IOMMU and a different command processor, so this driver is its own
+thing rather than a configuration of that one — which is why the class and the personality are
+`NativeAdreno418` and not a variant of `NativeAdreno`.
+
+| Item | Value | Source |
+| --- | --- | --- |
+| KGSL window | `0xfdb00000`, `0x40000` | Qualcomm `msm8992-gpu.dtsi`, `reg` of `qcom,kgsl-3d0@fdb00000` |
+| Interrupt | GIC SPI 33 | same node, `interrupts = <0 33 0>` |
+| Chip id | `0x04010800`, generation 4 | same node, `qcom,chipid` |
+| Clocks | `clk_oxili_gfx3d_clk`, `clk_oxilicx_ahb_clk`, `clk_oxili_rbbmtimer_clk` | same node, `clocks` |
+| Power levels | 600, 490, 450, 367, 300, 180, 27 MHz; boots at level 4 (300 MHz) | same node, `qcom,gpu-pwrlevels` and `qcom,initial-pwrlevel` |
+| Power domains | `gdsc_oxili_gx` at `0xfd8c4024`, `gdsc_oxili_cx` at `0xfd8c4034` | `msm-gdsc.dtsi`, four bytes each in the MMSS controller |
+| GPU IOMMU | `qcom,iommu@fdb10000`, `0x10000`, PMON GIC SPI 38 | `msm-iommu-v1.dtsi`, label `kgsl_iommu` |
+| "domain is on" | GDSCR bit 31 | `drivers/clk/qcom/gdsc.c`, `PWR_ON_MASK` |
+| Registers | dword indices `RBBM_HW_VERSION` `0x0000`, `RBBM_STATUS` `0x0191`, `CP_RB_BASE` `0x0200`, `CP_ME_CNTL` `0x022d` | freedreno `a4xx.xml`; Qualcomm's `a4xx_reg.h` uses the same indices |
+
+Mainline Linux does not help on this one: `msm8994.dtsi` in mainline has no kgsl node at all,
+so the values come from Qualcomm's msm-3.10 device tree for the same SoC as published for the
+LG G4 (`LineageOS/android_kernel_lge_msm8992`, branch `lineage-15.1`). Each is repeated, with
+the comment that names its source, in
+[drivers/NativeAdreno418/BoardConstants.h](drivers/NativeAdreno418/BoardConstants.h).
+
+### Why the driver refuses to read the block first
+
+An AHB access to a powered-down Qualcomm block does not fail politely; it can hang the
+interconnect, and on a phone with no serial console that looks exactly like a dead board. So
+the first act is not a register read: the driver maps the MMSS window, reads both GDSCRs and
+applies `PWR_ON`.
+
+| GDSCR state | What the driver does |
+| --- | --- |
+| gx on, cx on, no collapse request | reads `RBBM_HW_VERSION`, `RBBM_HW_CONFIGURATION`, `RBBM_STATUS` and the CP's `RB_*`/`ME_CNTL`, logs them, stops at rung 1 |
+| either domain collapsed | logs which one is down and reads nothing in the GPU window |
+| a collapse request pending | treats the domain as mid-transition and reads nothing |
+| `0xffffffff` back from the version register | reports that nothing backs the address the ADT gives, instead of reporting it as a revision |
+
+That is the same shape as the eMMC driver's warm handoff: take what the firmware left, prove
+it, and do not reset what cannot be rebuilt.
+
+### The ladder
+
+| Rung | What it proves | State |
+| --- | --- | --- |
+| 1 identity | the windows map, the domains are on, the revision answers | written, host-tested, and the only rung a driver runs |
+| 2 power | RPM vote, GDSC state machine, OxiLi clocks and the bus at a level | GDSC sequence written and host-tested (`gdscrEnableValue`, `gdscrPollUntilOn`/`Off`); RPM and clocks not written; unwired |
+| 3 smmu | 4 KiB page tables and the contexts a buffer is reached through | page-table encoder written and host-tested (`IommuCore`); the SMMU window at `0xfdb10000` and its contexts are not wired |
+| 4 ring | CP ring, write pointer, fences | `ringUsedDwords`, `ringFreeDwords`, `ringAdvance` written and host-tested; `CommandStream` builds the CP packets, paces the ring and refuses a submission that does not fit; unwired |
+| 5 blit | PM4 that clears or copies, confirmed by a fence | the confirming half is written and host-tested (`writeSubmissionTail`, `fenceWaitPoll`); the clear itself is not — see below |
+| 6 metal | the Metal plugin over Metal, metal2vulkan, Turnip and IR3 | no plugin for this generation; the addon it travels in is checked on the host (`scripts/check-gpu-addon.py`) |
+
+A written core is not a working rung: nothing in the driver programs the GDSC, the page tables
+or the ring, because each needs the rung below it to have run on a phone first. The distinction
+is a constant (`kCoreRung`) and a test, not a sentence.
+
+Rung 6 is where upstream's work is thickest, but not as it stands: upstream's
+`build-adreno-metal-plugin.py` builds for ARM64 iOS 17 while this board's userland is
+16.7.16, and Turnip's a4xx support is the other half of the question. Both are recorded as
+open, not assumed.
+
+### The command stream (rungs 4 and 5)
+
+The a4xx command processor reads **PM4 type-3** packets: a header whose top two bits are
+`0b11`, a 14-bit count of the words that follow, and an 8-bit opcode. The numbers and the
+packet shapes in [CommandStream.h](drivers/NativeAdreno418/CommandStream.h) are Linux's
+`msm` driver for this exact GPU (v5.15, `a4xx_gpu.c`) over freedreno's generated
+`adreno_pm4.xml.h`:
+
+| Word | Meaning |
+| --- | --- |
+| `0xc0010026`, `0` | `CP_WAIT_FOR_IDLE` with its one payload word |
+| `0xc0010046`, `7` | `CP_EVENT_WRITE` of `HLSQ_FLUSH` |
+| `0xc0030046`, `0x80000004`, address, value | `CP_EVENT_WRITE` of `CACHE_FLUSH_TS` with `BIT(31)`, which raises the interrupt and writes `value` at `address` |
+
+The third is the fence, and it is the only proof a submission finished. `a4xx_gpu.c` submits
+the three in that order, and `writeSubmissionTail` is that order as one call: eight words,
+flush then wait then fence, with the interrupt on the fence so the driver does not have to
+poll. `fenceWaitPoll` is the poll for when it does: a signed comparison, because the counter
+wraps — a fence asked for at `0xfffffff0` is reached by a counter that reads `0x00000004` —
+and a budget of 1,000 reads, because on a phone with no console a wait that never ends is
+indistinguishable from a dead board.
+
+What is *not* here is the blit. On an a4xx a clear is not a copy engine command: freedreno
+clears by drawing a rectangle with the binning and render stages programmed, so a clear means
+a state block, a shader and a draw — a larger piece of work than the fence that confirms it,
+and one that cannot be written honestly without the power and SMMU rungs running first. The
+ladder's test asserts `kCoreRung == Ring` for that reason: rung 5's confirming half exists,
+its drawing half does not.
+
+### Rung 6: the addon, and the version that stops it
+
+Upstream does not put the Metal driver in the kernel. It builds a plugin bundle outside it
+and hands the phone one blob: `addons/NativeAdrenoMetal.bundle/*`, an optional `.publish`, a
+`.clients` list, a `.primelist` of the system's `.metallib` files, `bin/adrenoprobed` and the
+launchd jobs under `daemons/`, packed as
+[`NGPUADD2`](scripts/check-gpu-addon.py) and mounted by the kernel from the boot payload.
+
+This repository does not write that format — it is upstream's, and a second writer would be
+a second guess at a parser the phone has. What it can do is check one, and
+`scripts/check-gpu-addon.py` does: the container and its padding, the paths, the modes, the
+bundle and its `Info.plist`, the sidecars, and then the two things a file listing cannot
+show — that the bundle binary is thin ARM64, and that its `LC_BUILD_VERSION` (or its
+`Info.plist`'s `MinimumOSVersion`) does not ask for more than iOS 16.7. The published plugin
+asks for 17. That failure is silent on the phone: the loader says nothing, the render server
+just never gets a device, and the screen stays as it was.
+
+### Linking it into the kernel
+
+Three things, the same three the eMMC driver needs:
+
+1. The archive, from `scripts/build-arm-driver.py NativeAdreno418` (listed in
+   `[kernel] archives`).
+2. `CONFIG_XNU_NATIVE_ADRENO418=y` in the defconfig, which produces `XNU_NATIVE_ADRENO418`.
+3. A personality in `iokit/KernelConfigTables.cpp`, applied as a patch:
+
+```c
+#if defined(XNU_NATIVE_ADRENO418) && XNU_NATIVE_ADRENO418
+    ",{"
+    " 'IOClass' = NativeAdreno418;"
+    " 'IOProviderClass' = IOPlatformDevice;"
+    " 'IONameMatch' = 'qcom,kgsl-3d0';"
+    " 'IOProbeScore' = 1000:32;"
+    "}"
+#endif
+```
+
+and the archive through `-Wl,-force_load`. Until that personality is in, the archive is built
+and never matched — which is the point of publishing nothing a client can bind.
+
+## iOS visual effects (blur and the rest)
+
+Blur, vibrancy and the material behind a sheet are not something UIKit draws. They are a render
+pass over the content behind the layer, done by the render server while it composites; on iOS
+16 that pass is a QuartzCore/RenderBox filter, and the GPU-backed paths for it go through
+Metal. "Proper effects", then, is a statement about the compositor, not about a driver that
+draws a blurred rectangle.
+
+That gives an order, and this board is at the start of it:
+
+| What an effect needs | State here |
+| --- | --- |
+| a panel the kernel still scans out after `ExitBootServices` | no driver: blocker 3 |
+| the render server compositing into that surface | upstream userland, not started on this board |
+| a Metal device (Metal, metal2vulkan, Turnip, NativeAdreno) | rung 1 of 6, and that rung publishes nothing |
+| a client that draws | SpringBoard, from the staged iOS image |
+
+Two consequences worth stating plainly. First, no effect of any kind can appear while there is
+no display driver: nothing owns the panel after the firmware hands over, so there is no surface
+for anything to composite into — blur is not the missing piece, the scanout is. Second, a port
+can put an iOS UI on a panel before the GPU works: upstream's tb128fu notes have QuartzCore
+drawing on the CPU and still reach the home screen with touch. Which filters that software path
+runs, and what a backdrop looks like when it does, is not established here. The GPU ladder is
+what makes the effects the ones iOS intends; the display driver is what lets any of them be
+seen.
 
 ## The interrupt controller (GICv2)
 
@@ -489,14 +665,31 @@ already in the ADT generator above, so the entry is a table row, not a driver.
 3. **Display has no native driver.** Lumia950XLPkg says its framebuffer depends on the stock
    Qualcomm UEFI and that MDP is not fully implemented, so after `ExitBootServices` there is
    no output unless an MSM8992 MDSS driver exists. With no serial console either, this is the
-   single most expensive missing piece.
+   single most expensive missing piece, and it gates every visual effect on this board (see
+   "iOS visual effects").
 4. **PSCI is HVC and incomplete** on 8992/8994: no `SYSTEM_OFF`, no `SYSTEM_RESET`. The ADT
    tool takes a `psci_method`, so this is expressible, but SMP bring-up is unproven.
 5. **No macOS here.** The kernel step needs Xcode; use the upstream macOS CI workflow or a
    Mac. `unixnu` on Windows can plan, not build.
 6. **No hardware in this loop.** Every remaining rung needs the phone.
+7. **The GPU stops at rung 1, and the rungs above it are arithmetic, not behavior.**
+   `NativeAdreno418` maps the windows, refuses to read a collapsed domain and reads the
+   revision. Rung 2's GDSC sequence, rung 3's page tables, rung 4's ring arithmetic and
+   packet builders and rung 5's fence wait exist as host-tested cores; no driver programs
+   any of them, and rung 5's clear is not written. Rung 2 still needs the RPM (SMD resource
+   requests) and the OxiLi clocks, rung 3 the SMMU contexts at `0xfdb10000`. Two questions on
+   the Metal side are named rather than assumed: upstream's plugin build targets iOS 17 while
+   this board runs 16.7.16, and Turnip's a4xx support has to cover the AIR the 16.7.16
+   QuartzCore ships. Adreno 418's command stream is also its own — the `AdrenoPM4` kit
+   upstream uses is A6xx-shaped, not a4xx, which is why the a4xx packets here are written from
+   Linux's `a4xx_gpu.c` instead.
 
 ## The CI jobs
+
+> Before touching anything here, read
+> [README_BEFORESTARTING!!!!!!!!!!!!!!.md](README_BEFORESTARTING!!!!!!!!!!!!!!.md). There is no
+> macOS on this machine: the `kernel` job is the only thing that compiles a driver, and a
+> green `validate` does not mean a driver built.
 
 There is no Mac here, and the kernel step needs one — Xcode plus the iphoneos SDK. Upstream
 solves that with a macOS runner, and the payload needs an EDK II toolchain that Windows does
@@ -505,7 +698,7 @@ not have either, so this repository carries
 
 | Job | Runner | Trigger | What it does |
 | --- | --- | --- | --- |
-| `validate` | `ubuntu-latest` | every push and pull request | parses `board.toml` and the defconfig, compiles and runs the core test, checks that the build driver accepts the board, and that the `example` guard still refuses to build |
+| `validate` | `ubuntu-latest` | every push and pull request | parses `board.toml` and the defconfig, compiles and runs both core tests, generates and checks the ADT, checks that the build driver accepts the board, and that the `example` guard still refuses to build |
 | `payload` | `ubuntu-latest` | manual, `target=payload` (the default) | installs clang, lld and the EDK II host tools, clones Mu_Basecore, builds `UniXNU.efi` and `DarwinBoot.efi`, stages `out/payload` and checks it |
 | `kernel` | `macos-latest` | manual, `target=kernel` | installs the Homebrew toolchain, fetches the Apple references, runs the XNU build, compiles `NativeSdhci`, links, and merges the image with the pinned kernelcache |
 
@@ -543,8 +736,15 @@ py -3 unixnu defconfig lumia950_defconfig -D ../lumia950
 py -3 unixnu status -D ../lumia950
 py -3 unixnu build kernel --dry-run -D ../lumia950     # refuses: example = true
 
-# host test of the driver core
+# host test of the driver cores (39 eMMC checks, 162 GPU checks)
 cd lumia950 && scripts\test-core.bat
+
+# the addon a rung-6 plugin would travel in: layout, bundle, iOS target
+py -3 scripts/check-gpu-addon.py --self-test
+py -3 scripts/check-gpu-addon.py build/gpu-addon.bin
+
+# a screenshot is this panel's or it is not evidence
+py -3 scripts/check-screenshot.py out/lockscreen.png
 ```
 
 The hardware rung is the staged payload on EFIESP, not a boot image: `unixnu bootimg` packs a

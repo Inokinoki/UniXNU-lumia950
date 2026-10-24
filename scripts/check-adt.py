@@ -403,6 +403,27 @@ def _check_arm_io(arm_io: Node, errors: list[str], notes: list[str]) -> None:
         elif len(reg) % 16 or len(reg) < 16:
             errors.append(f"/arm-io/{child.name}/reg is {len(reg)} bytes; each window is a 16-byte address/size pair")
 
+    # The GPU driver maps both of its windows by index, so the node has to carry
+    # exactly the two the driver expects, and the identity the driver checks has
+    # to be the one the device tree states.
+    kgsl = next((child for child in arm_io.children
+                 if (child.value("compatible") or b"").find(b"qcom,kgsl-3d0") >= 0), None)
+    if kgsl is None:
+        errors.append("/arm-io has no node compatible with qcom,kgsl-3d0")
+    else:
+        reg = kgsl.value("reg")
+        if reg is None or len(reg) != 32:
+            errors.append(f"/arm-io/{kgsl.name}/reg is {0 if reg is None else len(reg)} bytes, "
+                          "expected two 16-byte windows (KGSL and MMSS)")
+        interrupts = kgsl.value("interrupts")
+        if interrupts is None or len(interrupts) != 12:
+            errors.append(f"/arm-io/{kgsl.name}/interrupts must be three 32-bit cells")
+        chip = kgsl.value("chip-id")
+        if chip is None or len(chip) != 4:
+            errors.append(f"/arm-io/{kgsl.name}/chip-id must be one 32-bit value")
+        elif struct.unpack("<I", chip)[0] >> 24 != 4:
+            errors.append(f"/arm-io/{kgsl.name}/chip-id is not an a4xx generation")
+
     intc = arm_io.child("intc")
     if intc is None:
         errors.append("/arm-io has no intc")

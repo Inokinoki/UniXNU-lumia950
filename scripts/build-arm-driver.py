@@ -36,6 +36,19 @@ COMPONENTS = {
         # osfmk is where the recorded recipe resolves <mach/...> from.
         "include": ["drivers/NativeSdhci", "build/storage-abi/include", ".cache/xnu-work/osfmk"],
     },
+    "NativeAdreno418": {
+        # Rung 1 of the GPU: maps the KGSL and MMSS windows, checks the GDSC state
+        # and reads the revision registers. The cores hold the decoding, the ring
+        # arithmetic and the command stream; the driver calls the first of those
+        # only, but all of them are compiled here so a core that stops being valid
+        # ARM64 code fails in this archive rather than the day it is wired.
+        "sources": ["drivers/NativeAdreno418/NativeAdreno418.cpp",
+                    "drivers/NativeAdreno418/AdrenoCore.cpp",
+                    "drivers/NativeAdreno418/IommuCore.cpp",
+                    "drivers/NativeAdreno418/CommandStream.cpp"],
+        "out": "native-adreno418",
+        "include": ["drivers/NativeAdreno418"],
+    },
     "NativeLegacyDisplay": {
         # Not a matched driver: it exists so the kernel link resolves the probe symbol
         # that upstream's bsd_init.c calls without an XNU_NATIVE_LEGACY_DISPLAY guard.
