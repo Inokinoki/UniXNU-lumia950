@@ -11,7 +11,8 @@
 // interconnect instead of reporting a failure.
 //
 // What it does not do yet, in the order the ladder adds it (AdrenoCore.h):
-//   * rung 2, power: RPM votes plus the GDSC state machine and the OxiLi clocks
+//   * rung 2, power: the GDSC sequence is wired here, but the RPM resource vote
+//     and the OxiLi clock enables that make it take effect are not
 //   * rung 3, smmu: the 4 KiB page tables the GPU dereferences buffers through
 //   * rung 4, ring: CP_RB_* and a submission ring with fences
 //   * rung 5, blit: PM4 that clears or copies, verified by a fence
@@ -40,6 +41,7 @@ volatile uint32_t native_adreno418_gdscr_gx     = 0;
 volatile uint32_t native_adreno418_gdscr_cx     = 0;
 volatile uint32_t native_adreno418_hw_version   = 0;
 volatile uint32_t native_adreno418_window_alive = 0;   // the window answered a read
+volatile uint32_t native_adreno418_power_polls   = 0;   // reads spent waiting on a GDSC
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +87,59 @@ uint32_t NativeAdreno418::readMmss(uint32_t offset) const
     return value;
 }
 
+void NativeAdreno418::writeMmss(uint32_t offset, uint32_t value)
+{
+    if (!mmss) { return; }
+    memcpy(const_cast<uint8_t *>(mmss) + offset, &value, sizeof value);
+}
+
+// The GDSC sequence from drivers/clk/qcom/gdsc.c: refuse under hardware control,
+// clear SW_COLLAPSE, then poll PWR_ON a bounded number of times. What is missing
+// is everything that makes the write take effect on this SoC — the RPM vote and
+// the OxiLi clock enable — so a domain that does not come up here is a rung-2
+// gap being reported, not a bug to paper over.
+bool NativeAdreno418::powerDomainUp(uint32_t gdscrOffset, uint32_t *gdscr, const char *name)
+{
+    uint32_t current = readMmss(gdscrOffset);
+    if (decodeGdscr(current) == PowerState::On) {
+        *gdscr = current;
+        return true;
+    }
+    if (gdscrUnderHardwareControl(current)) {
+        IOLog("NativeAdreno418: %s is collapsed and under hardware control (0x%08x); the "
+              "power controller owns it, so software must not write SW_COLLAPSE\n",
+              name, current);
+        *gdscr = current;
+        return false;
+    }
+
+    IOLog("NativeAdreno418: %s is collapsed (0x%08x); clearing SW_COLLAPSE and polling "
+          "PWR_ON, which is rung 2's GDSC half without the RPM vote or the clocks\n",
+          name, current);
+    writeMmss(gdscrOffset, gdscrEnableValue(current));
+
+    GdscPoller poller = {};
+    gdscPollBegin(&poller);
+    GdscPoll result = GdscPoll::Waiting;
+    for (uint32_t attempt = 0; attempt < kGdscrMaxPolls; attempt++) {
+        current = readMmss(gdscrOffset);
+        result = gdscPollUntilOn(&poller, current);
+        if (result != GdscPoll::Waiting) { break; }
+    }
+
+    *gdscr = current;
+    native_adreno418_power_polls = poller.polls;
+    if (result != GdscPoll::PoweredOn) {
+        IOLog("NativeAdreno418: %s did not power on after %u reads (0x%08x); the missing "
+              "pieces are the RPM resource vote and the OxiLi clocks, both rung 2\n",
+              name, poller.polls, current);
+        return false;
+    }
+    IOLog("NativeAdreno418: %s powered on after %u reads (0x%08x)\n",
+          name, poller.polls, current);
+    return true;
+}
+
 uint32_t NativeAdreno418::readGpu(uint32_t dwordIndex) const
 {
     if (!gpu) { return 0xffffffffu; }
@@ -99,8 +154,12 @@ uint32_t NativeAdreno418::readGpu(uint32_t dwordIndex) const
 
 bool NativeAdreno418::identify()
 {
-    gdscrGx = readMmss(lumia950::kGdscrGxOffset);
-    gdscrCx = readMmss(lumia950::kGdscrCxOffset);
+    // Rung 2's GDSC half: bring each domain up if the firmware left it down. The
+    // reads below are only safe once both report PWR_ON, so this comes first.
+    // A domain that stays down is not fatal here: the logs below say which one,
+    // and the checks that follow refuse to read the block.
+    powerDomainUp(lumia950::kGdscrGxOffset, &gdscrGx, "gx");
+    powerDomainUp(lumia950::kGdscrCxOffset, &gdscrCx, "cx");
     native_adreno418_gdscr_gx = gdscrGx;
     native_adreno418_gdscr_cx = gdscrCx;
 

@@ -69,6 +69,7 @@ jobs:
                   if line.strip() and not line.startswith("#")]
           assert "CONFIG_XNU_NATIVE_SDHCI" in keys, keys
           assert "CONFIG_XNU_NATIVE_ADRENO418" in keys, keys
+          assert "CONFIG_XNU_NATIVE_MDSS" in keys, keys
           assert "CONFIG_XNU_BUILD_ARCHIVES" in keys, keys
           assert "CONFIG_XNU_EXTRA_LD_ARCHIVES" in keys, keys
           archives = board["kernel"]["archives"]
@@ -78,6 +79,9 @@ jobs:
           # node are only meaningful together with the archive.
           assert "build-arm-driver.py NativeAdreno418" in archives, archives
           assert pathlib.Path("drivers/NativeAdreno418/Info.plist").is_file()
+          # The display driver has the same three parts: archive, config, ADT node.
+          assert "build-arm-driver.py NativeMdss" in archives, archives
+          assert pathlib.Path("drivers/NativeMdss/Info.plist").is_file()
           ipsw = board["ipsw"]
           assert ipsw["url"].startswith("https://updates.cdn-apple.com/"), ipsw["url"]
           assert ipsw["version"].startswith("16."), ipsw  # the port stays on 16.x
@@ -216,6 +220,10 @@ jobs:
               drivers/NativeAdreno418/IommuCore.cpp \
               drivers/NativeAdreno418/CommandStream.cpp -o build/check-adreno-core
           ./build/check-adreno-core
+          g++ -std=c++17 -Wall -Wextra -Werror -I drivers/NativeMdss \
+              drivers/NativeMdss/Test/check-mdss-core.cpp \
+              drivers/NativeMdss/MdssCore.cpp -o build/check-mdss-core
+          ./build/check-mdss-core
 
       - name: The GPU addon checker rejects what the phone would choke on
         # Rung 6 hands the Metal plugin over as one blob. This repository does not write
@@ -457,6 +465,7 @@ jobs:
             out/*/tree/build/xnu/ios-obj/*/mach.development.bcm2837.unstripped
             out/*/tree/build/native-sdhci/**
             out/*/tree/build/native-adreno418/**
+            out/*/tree/build/native-mdss/**
             out/*/tree/build/native-legacy-display/**
             out/*/kernel/**
             out/*/logs/**

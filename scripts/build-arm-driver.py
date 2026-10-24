@@ -49,6 +49,16 @@ COMPONENTS = {
         "out": "native-adreno418",
         "include": ["drivers/NativeAdreno418"],
     },
+    "NativeMdss": {
+        # Rung 1 of the display: maps the MDP, MMSS, DSI0 and PHY windows, proves
+        # the mdss power domain is on, and logs what the firmware left scanning.
+        # It publishes no framebuffer, so nothing draws into a surface nothing
+        # scans out.
+        "sources": ["drivers/NativeMdss/NativeMdss.cpp",
+                    "drivers/NativeMdss/MdssCore.cpp"],
+        "out": "native-mdss",
+        "include": ["drivers/NativeMdss"],
+    },
     "NativeLegacyDisplay": {
         # Not a matched driver: it exists so the kernel link resolves the probe symbol
         # that upstream's bsd_init.c calls without an XNU_NATIVE_LEGACY_DISPLAY guard.

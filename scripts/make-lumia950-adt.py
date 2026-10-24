@@ -64,9 +64,21 @@ SDHCI_INTERRUPTS = (123, 138)
 # msm-gdsc.dtsi) is the source: kgsl-3d0@0xfdb00000, GIC SPI 33, and the OxiLi
 # power domains in the MMSS clock controller at 0xfd8c0000. The driver maps both
 # windows, so both are reg entries here.
-KGSL_WINDOWS = ((0xFDB00000, 0x40000), (0xFD8C0000, 0x1000))
+KGSL_WINDOWS = ((0xFDB00000, 0x40000), (0xFD8C0000, 0x10000))
 KGSL_INTERRUPT = 33
 GPU_CHIP_ID = 0x04010800
+# The display. Same tree: msm8992-mdss.dtsi gives mdp_phys, the DSI0 windows and
+# mmss_misc_phys; gdsc_mdss lives in the MMSS clock controller at 0xfd8c2304,
+# which is why the second window is 64 KiB and not the 4 KiB of the GPU node.
+# The driver maps all five by index, so the order here is the driver's order.
+MDSS_WINDOWS = (
+    (0xFD900000, 0x90000),   # mdp_phys
+    (0xFD8C0000, 0x10000),   # MMSS clock controller (gdsc_mdss)
+    (0xFD994000, 0x260),     # dsi_ctrl
+    (0xFD994500, 0x280),     # dsi_phy
+    (0xFD828000, 0x108),     # mmss_misc_phys
+)
+MDSS_INTERRUPT = 83
 # MPIDR affinity values: two A57 cores in cluster 0, four A53 cores in cluster 1.
 DEFAULT_CPU_REGS = "0,1,0x100,0x101,0x102,0x103"
 NVRAM_BANK_SIZE = 8192
@@ -269,6 +281,18 @@ def build_tree(
             ("chip-id", u32(GPU_CHIP_ID)),
         ],
     )
+    mdss = node(
+        "mdss@fd900000",
+        [
+            ("compatible", string("qcom,mdss_mdp", "qcom,mdp")),
+            ("reg", b"".join(u64(address) + u64(size) for address, size in MDSS_WINDOWS)),
+            ("interrupts", u32(0) + u32(MDSS_INTERRUPT) + u32(4)),
+            # The panel the firmware's GOP mode describes, so a driver that has
+            # the ADT but not the firmware still knows what it is driving.
+            ("panel-width", u32(1440)),
+            ("panel-height", u32(2560)),
+        ],
+    )
     arm_io = node(
         "arm-io",
         [
@@ -279,7 +303,7 @@ def build_tree(
             # use absolute SoC addresses, so an offset is the address.
             ("ranges", u64(0) + u64(0) + u64(1 << 32)),
         ],
-        [intc, sdhci, kgsl],
+        [intc, sdhci, kgsl, mdss],
     )
 
     children = [

@@ -30,6 +30,10 @@ archives = [
   # the archive and the personality cannot drift from the ADT node; it publishes
   # no GPU service, so linking it changes nothing a client can find.
   "build-arm-driver.py NativeAdreno418",
+  # Rung 1 of the display (README.md, "The display path"): the windows map, the
+  # mdss domain is proved on, and the firmware's DSI state is logged. It publishes
+  # no framebuffer, so linking it changes nothing a client can draw into.
+  "build-arm-driver.py NativeMdss",
   # Link input, not a driver: upstream calls native_legacy_display_probe() from
   # bsd_init.c without the XNU_NATIVE_LEGACY_DISPLAY guard every other call site has,
   # so the kernel needs the symbol even with the flag off. The defconfig force-loads

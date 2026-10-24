@@ -168,6 +168,7 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | Prelinked kernel | merged by the kernel job: 9 components, 12,882 rebindings, a sparse prelink index; the tool marks it unqualified and it has not run. The kernel stage takes that image without changing it |
 | XNU entry | the GICv2 interrupt path exists, accepts the ADT's `qcom,msm-qgic2` node and boots under QEMU (see "The interrupt controller"); the phone stages a kernel, its ADT sidecar and the loader entry with `scripts/stage-kernel.py`, so the first flash waits on EL1 and on a display driver |
 | Storage driver | written, host-tested, never run on hardware |
+| Display (`NativeMdss`) | rung 1 of 6: maps the MDP, MMSS, DSI0 and PHY windows, proves `gdsc_mdss` is on, then reads the MDSS/MDP revisions, the DSI controller's version and enable bits and the firmware's raw video-timing words. Publishes no framebuffer, never run on hardware |
 | GPU (`NativeAdreno418`) | rung 1 of 6 runs: maps the KGSL and MMSS windows, refuses to read a collapsed domain, reads the revision. Rungs 2–4 and the fence half of 5 exist as host-tested cores (`gdscrEnableValue`/`gdscrPollUntilOn`, `IommuCore`, `CommandStream`) and are not wired; rung 6 has a host checker for the addon blob but no plugin built for iOS 16. Built by the archive step, publishes no GPU service, never run on hardware |
 | iOS visual effects | none, and blocked twice over: no display driver (blocker 3) and no Metal device (blocker 7). See "iOS visual effects" |
 | Root volume and userland | not started |
@@ -177,7 +178,8 @@ in that volume, so the volume buttons are only a menu input, not a way into a sh
 | Check | Command | Result |
 | --- | --- | --- |
 | SDHCI core logic (39 checks) | `scripts\test-core.bat` (Windows) or the `g++` line inside it | all pass |
-| Adreno 418 core logic (162 checks) | same runner: the second block compiles and runs `check-adreno-core` | all pass |
+| Adreno 418 core logic (184 checks) | same runner: the second block compiles and runs `check-adreno-core` | all pass |
+| Display core logic (49 checks) | same runner: the third block compiles and runs `check-mdss-core` | all pass |
 | GPU addon blob (17 self-test cases) | `python3 scripts/check-gpu-addon.py --self-test` | a coherent blob accepted; a bad signature, a mis-sized header, missing padding, a climbing path, a non-executable probe, an executable plist, a bundle without `Info.plist`, an iOS 17 minimum, a macOS build, a non-Mach-O binary, an entitlements plist under `daemons/`, a bad publish file, a malformed client name and a relative primelist entry all refused |
 | Board and defconfig parse | `unixnu defconfig lumia950_defconfig -D lumia950` | accepted |
 | Module resolution | `unixnu status -D lumia950` | `driver NativeSdhci device`, `driver NativeAdreno418 device` |
@@ -297,7 +299,14 @@ lumia950/
     AdrenoCore.{h,cpp}              chipid and GDSCR decoding, the GDSC sequence, CP ring
                                     arithmetic, the ladder
     IommuCore.{h,cpp}               ARMv7 short-descriptor page tables for the GPU's SMMU
-    CommandStream.{h,cpp}           PM4 packets, ring pacing, the fence and its wait
+    CommandStream.{h,cpp}           PM4 packets, ring pacing, the fence and its wait,
+                                    the CP microcode loader plan
+  drivers/NativeMdss/               the display, bring-up rung 1
+    BoardConstants.h                MDP, DSI0, PHY, MMSS and gdsc_mdss, each with its source
+    MdssCore.{h,cpp}                power-domain decode, DSI link arithmetic, DSI mode bits
+    NativeMdss.{h,cpp}              IOKit driver: firmware handover, no framebuffer published
+    Info.plist                      personality for `qcom,mdss_mdp`
+    Test/check-mdss-core.cpp        host test for the core
     NativeAdreno418.{h,cpp}         IOKit driver: power gate, revision read, no service published
     Info.plist                      personality for `qcom,kgsl-3d0`
     Test/check-adreno-core.cpp      host test for the core
@@ -481,7 +490,7 @@ it, and do not reset what cannot be rebuilt.
 | Rung | What it proves | State |
 | --- | --- | --- |
 | 1 identity | the windows map, the domains are on, the revision answers | written, host-tested, and the only rung a driver runs |
-| 2 power | RPM vote, GDSC state machine, OxiLi clocks and the bus at a level | GDSC sequence written and host-tested (`gdscrEnableValue`, `gdscrPollUntilOn`/`Off`); RPM and clocks not written; unwired |
+| 2 power | RPM vote, GDSC state machine, OxiLi clocks and the bus at a level | the GDSC half is wired: `start()` clears SW_COLLAPSE and polls PWR_ON on both domains before any read, refusing under hardware control; the RPM vote and the OxiLi clocks are not written, so a cold domain still stays cold and the log says so |
 | 3 smmu | 4 KiB page tables and the contexts a buffer is reached through | page-table encoder written and host-tested (`IommuCore`); the SMMU window at `0xfdb10000` and its contexts are not wired |
 | 4 ring | CP ring, write pointer, fences | `ringUsedDwords`, `ringFreeDwords`, `ringAdvance` written and host-tested; `CommandStream` builds the CP packets, paces the ring and refuses a submission that does not fit; unwired |
 | 5 blit | PM4 that clears or copies, confirmed by a fence | the confirming half is written and host-tested (`writeSubmissionTail`, `fenceWaitPoll`); the clear itself is not — see below |
@@ -564,6 +573,73 @@ Three things, the same three the eMMC driver needs:
 
 and the archive through `-Wl,-force_load`. Until that personality is in, the archive is built
 and never matched — which is the point of publishing nothing a client can bind.
+
+## The display path
+
+Blocker 3 has been the display, and for a reason: no driver means nothing scans out after
+`ExitBootServices`, which means no surface for iOS to composite into. This is the first
+attempt at that driver, and it stops where the sources stop.
+
+### What is sourced, and what is not
+
+| Value | Source |
+| --- | --- |
+| MDP `0xfd900000` + `0x90000`, VBIF `0xfd9b0000`, IRQ 83 | `msm8992-mdss.dtsi`, `mdss_mdp@fd900000` |
+| MDP register block at `+0x1000` | same node, `qcom,mdss-mdp-reg-offset` |
+| DSI0 ctrl `0xfd994000` + `0x260`, PHY `0xfd994500` + `0x280`, PHY regulator `0xfd994780`, misc `0xfd828000` | same node, `qcom,mdss_dsi@fd994000` |
+| `gdsc_mdss` at `0xfd8c2304` | `msm-gdsc.dtsi` |
+| PMIC rails L2, L12, L14, L28 | same DSI node, `vdda`/`vddio`/`vdd`/`vcca` |
+| `DSI_VERSION` `0x1f0`, `DSI_CTRL` `0x0`, the six video-timing words, `DIS_INTF_SEL` | `dsi_host_v2.h`, `mdss_mdp_hwio.h` |
+
+Not sourced, and therefore not written: the **DSI PHY's PLL table** (the 28 nm block's VCO,
+post-dividers, timing, LDO and calibration values are a per-rate table in Qualcomm's
+`mdss_dsi_phy` code) and the **panel's own init sequence** (the Lumia 950's panel is not the
+LG G4's, so the G4's panel DTSI is not a source for it). A driver that invents either is a
+driver that will drive a panel into an unknown state and report success.
+
+### The ladder
+
+| Rung | What it proves | State |
+| --- | --- | --- |
+| 1 identity | the windows map, `gdsc_mdss` is on, the MDSS/MDP/DSI revisions answer | written, host-tested, and the only rung a driver runs |
+| 2 power | the pm8994 rails, the GDSC write, and the byte/pixel/esc clocks | the GDSC decode is written and host-tested; the rails and clocks are not written |
+| 3 timings | the DSI PHY's PLL and the panel's init sequence actually program the link | the link arithmetic is written and host-tested (`pixelClockHz`, `byteClockFor`, `bitClockHz`, `clocksAgree`); the PHY table and the panel sequence are not |
+| 4 scanout | MDP source → mixer → ping-pong → DSI0, and the panel keeps scanning | not written |
+| 5 framebuffer | an `IOFramebuffer` over that scanout | not written |
+| 6 effects | QuartzCore's filters over the scanout — blur is this rung | not written |
+
+Rung 1 is a warm-handoff read, the same shape as the GPU's. The firmware drew the logo and
+the UniXNU menu through this block, so the interesting question is what it left behind: the
+MDSS and MDP revisions, `DSI_VERSION`, the three enable bits in `DSI_CTRL` (a link that is
+enabled but in neither video nor command mode is power with no mode — a configuration this
+driver would not program and would report as it read it), and the six video-timing words as
+raw values. Those six are **logged, not decoded**: their field layout is not sourced here,
+and a driver that decodes a timing it cannot cite will believe its own arithmetic over the
+panel.
+
+Rung 3's arithmetic is worth having anyway, because it is the arithmetic every later rung
+needs: `htotal × vtotal × refresh` is the pixel clock, `pixel clock × bytes per pixel` is the
+byte clock, `byte clock × 8 / lanes` is the lane clock, and `clocksAgree` compares a clock
+the hardware reports with the one that arithmetic asks for, inside a tolerance the caller
+states rather than one this repository has invented. A 1440x2560 timing with 60 lines of
+blanking and 60 Hz is 232.92 MHz of pixels, 698.76 MB/s of bytes and 1.39752 Gb/s per lane
+on four lanes — numbers the host test checks exactly.
+
+### The window that was too small
+
+Writing this driver found a real bug in the GPU driver it mirrors: the KGSL node's second
+window, the MMSS clock controller, was declared as 4 KiB, while the GDSCs it exists to read
+sit at `0x4024` and `0x4034`. Those reads were past the end of the mapping — and on a kernel
+mapping that is not an access fault, it is whatever the next page happens to be. Both nodes
+now declare 64 KiB, and both core test suites assert that every register offset is inside
+the window that carries it.
+
+### Nothing is published
+
+`NativeMdss` does not create an `IOFramebuffer` and does not publish a service. A framebuffer
+that half-drives a panel is a black screen that reads as a kernel panic to everyone who is
+not looking at the log — and this board has no serial console to look at it on. The
+`kWrittenRung` constant says rung 1; rung 5 is what changes that.
 
 ## iOS visual effects (blur and the rest)
 
@@ -662,9 +738,13 @@ already in the ADT generator above, so the entry is a table row, not a driver.
    first flash either satisfies or reports (see "Stage two: the kernel"). The HackiOS
    loader's own synthesized tree would still need an MSM8992 platform entry, but the phone
    does not use that loader.
-3. **Display has no native driver.** Lumia950XLPkg says its framebuffer depends on the stock
+3. **Display: rung 1 of 6, and the panel is still unowned.** `NativeMdss` maps the windows,
+   proves the mdss domain is on and reads what the firmware left (MDSS/MDP/DSI revisions, the
+   DSI enable bits, the raw timing words), and it publishes no framebuffer. What is still
+   missing is the part that cannot be guessed: the DSI PHY's PLL table (rung 3) and the
+   panel's own init sequence. Lumia950XLPkg says its framebuffer depends on the stock
    Qualcomm UEFI and that MDP is not fully implemented, so after `ExitBootServices` there is
-   no output unless an MSM8992 MDSS driver exists. With no serial console either, this is the
+   no output until rung 4 scans something out. With no serial console either, this is the
    single most expensive missing piece, and it gates every visual effect on this board (see
    "iOS visual effects").
 4. **PSCI is HVC and incomplete** on 8992/8994: no `SYSTEM_OFF`, no `SYSTEM_RESET`. The ADT
@@ -673,11 +753,17 @@ already in the ADT generator above, so the entry is a table row, not a driver.
    Mac. `unixnu` on Windows can plan, not build.
 6. **No hardware in this loop.** Every remaining rung needs the phone.
 7. **The GPU stops at rung 1, and the rungs above it are arithmetic, not behavior.**
-   `NativeAdreno418` maps the windows, refuses to read a collapsed domain and reads the
-   revision. Rung 2's GDSC sequence, rung 3's page tables, rung 4's ring arithmetic and
-   packet builders and rung 5's fence wait exist as host-tested cores; no driver programs
-   any of them, and rung 5's clear is not written. Rung 2 still needs the RPM (SMD resource
-   requests) and the OxiLi clocks, rung 3 the SMMU contexts at `0xfdb10000`. Two questions on
+   `NativeAdreno418` maps the windows, brings a collapsed domain up through its GDSC if the
+   hardware will let it, and reads the revision. Rung 3's page tables, rung 4's ring
+   arithmetic and packet builders and rung 5's fence wait exist as host-tested cores; no
+   driver programs any of them, and rung 5's clear is not written. Rung 2 still needs the RPM
+   (SMD resource requests) and the OxiLi clocks, without which the GDSC write does not take
+   effect and the log says so; rung 3 needs the SMMU contexts at `0xfdb10000`.
+8. **Rung 4 needs firmware this repository does not carry.** An a4xx command processor runs
+   microcode: Linux's `a4xx_gpu.c` loads PM4 into `CP_ME_RAM` and the PFP into
+   `CP_PFP_UCODE` before it programs a ring, then clears `ME_HALT`. `CommandStream` has the
+   load plan (version word checked, offset and write count pinned by the host test) but no
+   image to load, so a ring programmed now would be read by a CP that is not running. Two questions on
    the Metal side are named rather than assumed: upstream's plugin build targets iOS 17 while
    this board runs 16.7.16, and Turnip's a4xx support has to cover the AIR the 16.7.16
    QuartzCore ships. Adreno 418's command stream is also its own — the `AdrenoPM4` kit
@@ -736,7 +822,7 @@ py -3 unixnu defconfig lumia950_defconfig -D ../lumia950
 py -3 unixnu status -D ../lumia950
 py -3 unixnu build kernel --dry-run -D ../lumia950     # refuses: example = true
 
-# host test of the driver cores (39 eMMC checks, 162 GPU checks)
+# host test of the driver cores (39 eMMC + 184 GPU + 49 display checks)
 cd lumia950 && scripts\test-core.bat
 
 # the addon a rung-6 plugin would travel in: layout, bundle, iOS target

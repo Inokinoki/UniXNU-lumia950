@@ -1,8 +1,55 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "CommandStream.h"
 
+#include "BoardConstants.h"
+
 namespace adreno {
 namespace pm4 {
+
+// ---------------------------------------------------------------------------
+// Microcode
+// ---------------------------------------------------------------------------
+
+UcodeTarget ucodeTarget(CpUcode which)
+{
+    if (which == CpUcode::Pfp) {
+        return UcodeTarget{ lumia950::kRegCpPfpUcodeAddr, lumia950::kRegCpPfpUcodeData };
+    }
+    return UcodeTarget{ lumia950::kRegCpMeRamWaddr, lumia950::kRegCpMeRamData };
+}
+
+bool planUcodeLoad(const u32 *blob, u32 blobWords, CpUcode which, UcodePlan *plan)
+{
+    if (!blob || !plan) { return false; }
+    // Two words is the shortest thing that is an image: a version and one word.
+    if (blobWords < 2) { return false; }
+    // An all-ones version is the window not answering, and zero is not a
+    // version a firmware image carries; either way there is nothing to load.
+    if (blob[0] == 0xffffffffu || blob[0] == 0) { return false; }
+
+    const UcodeTarget target = ucodeTarget(which);
+    plan->addressIndex = target.addressIndex;
+    plan->dataIndex = target.dataIndex;
+    plan->data = blob + 1;
+    plan->dataWords = blobWords - 1;
+    plan->version = blob[0];
+    return true;
+}
+
+u32 ucodeWriteCount(const UcodePlan &plan)
+{
+    // The address write, then one write per word through the data port.
+    return plan.data ? 1 + plan.dataWords : 0;
+}
+
+bool ringBaseUsable(u32 address, u32 ringBytes)
+{
+    if (ringBytes == 0 || (ringBytes & (ringBytes - 1)) != 0) { return false; }
+    // An address with no device behind it is not a ring the CP can walk, and the
+    // alignment rule is the ring's own size, not a fixed 4 KiB.
+    if (address == 0 || address == 0xffffffffu) { return false; }
+    return (address & (ringBytes - 1)) == 0;
+}
 
 u32 header(u32 opcode, u32 payloadDwords)
 {

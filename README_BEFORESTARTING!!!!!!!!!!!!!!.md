@@ -29,7 +29,7 @@ explicitly** or you get the EFI build and no driver compile at all.
 
 | Job | Runs when | What it is the only proof of | Artifact |
 | --- | --- | --- | --- |
-| `validate` | every push to `main`, every PR, **and every dispatch** | `board.toml` and defconfig parse, both core host tests pass (39 eMMC + 162 GPU checks), the GPU addon checker refuses all 15 deliberate defects, ADT generates and passes `check-adt.py`, `unixnu` accepts the board, `example` is still refused | none |
+| `validate` | every push to `main`, every PR, **and every dispatch** | `board.toml` and defconfig parse, all three core host tests pass (39 eMMC + 184 GPU + 49 display checks), the GPU addon checker refuses all 15 deliberate defects, ADT generates and passes `check-adt.py` (9 mutants refused), `unixnu` accepts the board, `example` is still refused | none |
 | `payload` | dispatch with `target=payload` or `both` | `UniXNU.efi`, `DarwinBoot.efi` and the staged `out/payload` tree | `lumia950-payload` |
 | `kernel` | dispatch with `target=kernel` or `both` | **every driver compiles against the recorded XNU ABI with `-Werror`**, the kernel links, and the pinned 16.7.16 kernelcache merges | `lumia950-kernel` |
 
@@ -60,9 +60,17 @@ Do not ask "should I run CI?" — run it, then read the log.
 5. **The `kernel` job is long (macOS + Xcode).** Dispatch it as soon as a driver change is
    ready, do not stack five changes onto one run whose failure will not name the culprit.
 6. **A core in the archive is not a rung.** `CommandStream.cpp` compiles into
-   `native-adreno418` and nothing calls it: rungs 2–5 are arithmetic proven on this machine,
+   `native-adreno418` and nothing calls it: rungs 3–5 are arithmetic proven on this machine,
    and the ladder constant `kCoreRung` says exactly how far that goes. Reading a core test
    as "the GPU works" is the single easiest lie in this repository.
+7. **The display driver publishes no framebuffer, on purpose.** `NativeMdss` runs at rung 1:
+   it maps and reads. A green `validate` says its arithmetic is right, not that anything is
+   on the panel. Rung 4 is where a picture could appear and rung 5 where iOS could draw; the
+   DSI PHY's PLL table and the panel's init sequence are still absent, and they are not
+   things to guess at.
+8. **A window has to contain the registers read through it.** The MMSS window was declared
+   4 KiB while the GDSCs sit at `0x4024`; the read went past the mapping. Both core tests now
+   assert the offsets are inside their windows — do the same for any node you add.
 
 ## Resolution and screenshots
 

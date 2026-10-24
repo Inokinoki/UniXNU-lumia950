@@ -24,7 +24,14 @@ private:
     bool mapWindows(IOService *provider);
 
     uint32_t readMmss(uint32_t byteOffset) const;
+    void writeMmss(uint32_t byteOffset, uint32_t value);
     uint32_t readGpu(uint32_t dwordIndex) const;
+
+    // Rung 2, the half that needs no RPM: if the firmware left a domain collapsed
+    // and it is not under hardware control, clear SW_COLLAPSE and poll PWR_ON the
+    // way drivers/clk/qcom/gdsc.c does. The RPM vote and the OxiLi clocks are still
+    // missing, so this can fail, and it says so when it does.
+    bool powerDomainUp(uint32_t gdscrOffset, uint32_t *gdscr, const char *name);
 
     // Rung 1: prove the domains are on before touching the block, then read the
     // revision registers. Returns false when the driver must not go further.

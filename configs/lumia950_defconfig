@@ -12,6 +12,10 @@ CONFIG_XNU_NATIVE_SDHCI=y
 # documented in README.md, "Linking it into the kernel"; no GPU service is
 # published, so nothing that looks for a Metal device can bind it yet.
 CONFIG_XNU_NATIVE_ADRENO418=y
+# Rung 1 of the display. The archive is built and the personality is documented in
+# README.md, "Linking it into the kernel"; no framebuffer is published, so nothing
+# draws into a surface nothing scans out.
+CONFIG_XNU_NATIVE_MDSS=y
 
 # ArmCpu is only accepted with the real source crypto provider, and the kernel
 # link expects the namespaced corecrypto archive that the builders above make.

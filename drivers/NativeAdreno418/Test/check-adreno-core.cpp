@@ -318,6 +318,48 @@ int main()
              "a submission tail that does not fit writes nothing");
     expectEq(stream[0], 0u, "and leaves the buffer alone");
 
+    // --- microcode: the gate on rung 4 --------------------------------------
+    expectEq(adreno::pm4::ucodeTarget(adreno::pm4::CpUcode::Pm4).addressIndex, 0x0225u,
+             "PM4 goes through CP_ME_RAM_WADDR");
+    expectEq(adreno::pm4::ucodeTarget(adreno::pm4::CpUcode::Pfp).addressIndex, 0x0223u,
+             "the PFP through CP_PFP_UCODE_ADDR");
+    expectEq(adreno::pm4::ucodeTarget(adreno::pm4::CpUcode::Pfp).dataIndex, 0x0224u,
+             "and its data port");
+
+    const u32 pm4Blob[] = { 0x00010203u, 0xa4a4a4a4u, 0x11111111u, 0x22222222u };
+    adreno::pm4::UcodePlan plan = {};
+    expect(adreno::pm4::planUcodeLoad(pm4Blob, 4, adreno::pm4::CpUcode::Pm4, &plan),
+           "a blob with a version and an image is a plan");
+    expectEq(plan.version, 0x00010203u, "the version is word 0");
+    expectEq(plan.dataWords, 3, "the image is everything after it");
+    expectEq(plan.data[0], 0xa4a4a4a4u, "the first image word");
+    expectEq(adreno::pm4::ucodeWriteCount(plan), 4, "one address write and one per image word");
+
+    const u32 versionOnly[] = { 0x00010203u };
+    expect(!adreno::pm4::planUcodeLoad(versionOnly, 1, adreno::pm4::CpUcode::Pm4, &plan),
+           "a version with no image is not a plan");
+    const u32 deadWindow[] = { 0xffffffffu, 0x1u };
+    expect(!adreno::pm4::planUcodeLoad(deadWindow, 2, adreno::pm4::CpUcode::Pfp, &plan),
+           "an all-ones version is a dead window, not firmware");
+    const u32 noVersion[] = { 0u, 0x1u };
+    expect(!adreno::pm4::planUcodeLoad(noVersion, 2, adreno::pm4::CpUcode::Pm4, &plan),
+           "zero is not a version a firmware image carries");
+    adreno::pm4::UcodePlan fresh = {};
+    expect(!adreno::pm4::planUcodeLoad(nullptr, 4, adreno::pm4::CpUcode::Pm4, &fresh),
+           "no blob is no plan");
+    expectEq(adreno::pm4::ucodeWriteCount(fresh), 0, "and a refused plan writes nothing");
+    expect(!adreno::pm4::planUcodeLoad(pm4Blob, 4, adreno::pm4::CpUcode::Pm4, nullptr),
+           "nowhere to put the plan is a refusal");
+
+    expect(adreno::pm4::ringBaseUsable(0x90000000u, 0x10000),
+           "a ring base aligned to its own size is usable");
+    expect(!adreno::pm4::ringBaseUsable(0x90000004u, 0x10000),
+           "an unaligned base is not; the CP requires the ring's size as alignment");
+    expect(!adreno::pm4::ringBaseUsable(0x90000000u, 0x18000),
+           "a ring that is not a power of two has no alignment rule");
+    expect(!adreno::pm4::ringBaseUsable(0xffffffffu, 0x10000), "all ones is not an address");
+    expect(!adreno::pm4::ringBaseUsable(0u, 0x10000), "and neither is zero");
+
     // --- the fence (rung 5) -----------------------------------------------
     expect(adreno::pm4::fenceReached(5, 5), "an equal counter is reached");
     expect(!adreno::pm4::fenceReached(4, 5), "a counter behind the value is not");
@@ -358,6 +400,15 @@ int main()
            "only rung 1 is written, and the driver says so");
     expect(adreno::kCoreRung == adreno::Rung::Ring,
            "cores exist through rung 4; 5's fence half and 6's addon audit are separate");
+    // Both GDSCRs are read through the MMSS window the ADT gives. They sit at
+    // 0x4024 and 0x4034, so a 0x1000-byte window would put every read past its
+    // end; this is the test that noticed.
+    expect(lumia950::kGdscrGxOffset + 4 <= lumia950::kMmssSize,
+           "gdsc_oxili_gx is inside the MMSS window");
+    expect(lumia950::kGdscrCxOffset + 4 <= lumia950::kMmssSize,
+           "gdsc_oxili_cx is inside the MMSS window");
+    expect(lumia950::kRegCpMeCntl << lumia950::kRegisterShift < lumia950::kGpuSize,
+           "the last CP register is inside the KGSL window");
     expect(std::strcmp(adreno::rungName(adreno::Rung::Identity), "identity") == 0,
            "rung 1 is named identity");
     expect(std::strcmp(adreno::rungName(adreno::Rung::Metal), "metal") == 0,

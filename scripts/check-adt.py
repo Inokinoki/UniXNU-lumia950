@@ -424,6 +424,36 @@ def _check_arm_io(arm_io: Node, errors: list[str], notes: list[str]) -> None:
         elif struct.unpack("<I", chip)[0] >> 24 != 4:
             errors.append(f"/arm-io/{kgsl.name}/chip-id is not an a4xx generation")
 
+    # The display driver maps five windows by index — mdp, the MMSS clock
+    # controller, DSI0's two windows and mmss_misc — and reads gdsc_mdss at
+    # 0x2304 in the second, so a window shorter than that is a read past the
+    # end: the register has to be inside the mapping, not merely near it.
+    mdss = next((child for child in arm_io.children
+                 if (child.value("compatible") or b"").find(b"qcom,mdss_mdp") >= 0), None)
+    if mdss is None:
+        errors.append("/arm-io has no node compatible with qcom,mdss_mdp")
+    else:
+        reg = mdss.value("reg")
+        if reg is None or len(reg) != 5 * 16:
+            errors.append(f"/arm-io/{mdss.name}/reg is {0 if reg is None else len(reg)} bytes, "
+                          "expected five 16-byte windows (mdp, mmss, dsi ctrl, dsi phy, misc)")
+        else:
+            windows = [struct.unpack("<QQ", reg[at:at + 16]) for at in range(0, len(reg), 16)]
+            if windows[0][0] != 0xFD900000:
+                errors.append(f"/arm-io/{mdss.name}: the first window is the MDP at 0xfd900000")
+            if windows[1][0] != 0xFD8C0000 or windows[1][1] < 0x2308:
+                errors.append(f"/arm-io/{mdss.name}: the second window must be the MMSS clock "
+                              "controller, big enough for gdsc_mdss at 0x2304")
+            if windows[2][0] != 0xFD994000:
+                errors.append(f"/arm-io/{mdss.name}: the third window is DSI0's ctrl at 0xfd994000")
+        interrupts = mdss.value("interrupts")
+        if interrupts is None or len(interrupts) != 12:
+            errors.append(f"/arm-io/{mdss.name}/interrupts must be three 32-bit cells")
+        for name, want in (("panel-width", 1440), ("panel-height", 2560)):
+            value = mdss.value(name)
+            if value is None or len(value) != 4 or struct.unpack("<I", value)[0] != want:
+                errors.append(f"/arm-io/{mdss.name}/{name} must be {want}")
+
     intc = arm_io.child("intc")
     if intc is None:
         errors.append("/arm-io has no intc")
@@ -532,6 +562,26 @@ def self_test() -> int:
     expect_failure(no_identity, "gethostuuid", "missing identity")
     validate(parse(no_identity), allow_missing_identity=True)
 
+    # The display driver reads gdsc_mdss at 0x2304 through the second window, so
+    # a window that stops before it is a read past the end of a mapping.
+    tree = parse(good)
+    arm_io = tree.child("arm-io")
+    mdss = arm_io.child("mdss@fd900000")
+    reg = mdss.prop("reg")
+    windows = [struct.unpack("<QQ", reg.value[at:at + 16]) for at in range(0, len(reg.value), 16)]
+    windows[1] = (windows[1][0], 0x1000)
+    mdss.props = [item if item.name != "reg" else
+                  Prop("reg", b"".join(struct.pack("<QQ", *window) for window in windows),
+                       item.value_offset, b"")
+                  for item in mdss.props]
+    expect_failure(encode(tree), "gdsc_mdss", "MMSS window too short for gdsc_mdss")
+
+    tree = parse(good)
+    arm_io = tree.child("arm-io")
+    mdss = arm_io.child("mdss@fd900000")
+    mdss.props = [item for item in mdss.props if item.name != "panel-width"]
+    expect_failure(encode(tree), "panel-width", "no panel width")
+
     # Nonzero padding in a real value: the generator never writes it, so patch a copy.
     tree = parse(good)
     chosen = tree.child("chosen")
@@ -540,7 +590,7 @@ def self_test() -> int:
     padded[prop.value_offset + len(prop.value)] = 0xFF
     expect_failure(bytes(padded), "padding", "nonzero padding")
 
-    print(f"self-test ok: the good tree passes ({len(notes)} notes) and 7 mutants are rejected")
+    print(f"self-test ok: the good tree passes ({len(notes)} notes) and 9 mutants are rejected")
     return 0
 
 

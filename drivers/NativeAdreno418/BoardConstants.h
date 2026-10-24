@@ -72,8 +72,14 @@ constexpr adreno::u32 kGpuSize = 0x40000;
 // MMSS clock controller: where the two OxiLi power domains report their state.
 // The driver's ADT node carries this as its second reg window so the mapping
 // needs nothing the platform expert does not already publish.
+//
+// The window is 64 KiB, not 4 KiB: the GDSC registers sit at 0x4024 and 0x4034,
+// past the first page, so a 0x1000-byte mapping would leave every GDSCR read
+// outside it — a driver that maps a window and then reads past its end gets
+// whatever the virtual mapping does next, which on a kernel mapping is not an
+// access fault but a wrong answer.
 constexpr adreno::u64 kMmssPhys = 0xfd8c0000ULL;
-constexpr adreno::u32 kMmssSize = 0x1000;
+constexpr adreno::u32 kMmssSize = 0x10000;
 
 constexpr adreno::u32 kGdscrGxOffset = 0x4024;   // gdsc_oxili_gx
 constexpr adreno::u32 kGdscrCxOffset = 0x4034;   // gdsc_oxili_cx
@@ -113,6 +119,13 @@ constexpr adreno::u32 kRegCpRbCntl = 0x0201;
 constexpr adreno::u32 kRegCpRbRptr = 0x0204;
 constexpr adreno::u32 kRegCpRbWptr = 0x0205;
 constexpr adreno::u32 kRegCpMeCntl = 0x022d;
+// The command processor's microcode ports (freedreno a4xx.xml). a4xx_gpu.c loads
+// PM4 into CP_ME_RAM and the PFP into its own window before it touches the ring,
+// so these are the registers that gate rung 4 rather than the ring's own.
+constexpr adreno::u32 kRegCpPfpUcodeAddr = 0x0223;
+constexpr adreno::u32 kRegCpPfpUcodeData = 0x0224;
+constexpr adreno::u32 kRegCpMeRamWaddr = 0x0225;
+constexpr adreno::u32 kRegCpMeRamData = 0x0227;
 
 // The a4xx command processor ring must be a power of two and 4 KiB aligned.
 // 64 KiB is this driver's choice for the rung that submits work, not a value

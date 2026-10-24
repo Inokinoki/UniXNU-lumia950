@@ -73,6 +73,50 @@ u32 writeSubmissionTail(u32 *out, u32 capacity, u32 fenceAddress, u32 fenceValue
 bool ringHasRoom(u32 writePointer, u32 readPointer, u32 ringDwords, u32 submissionDwords);
 u32 ringWritePointerAfter(u32 writePointer, u32 submissionDwords, u32 ringDwords);
 
+// ---------------------------------------------------------------------------
+// Getting a command processor at all (the gate on rung 4)
+//
+// A ring is not enough to submit work: the a4xx CP runs microcode, and Linux's
+// a4xx_gpu.c loads two blobs into it before it programs a ring — PM4 into
+// CP_ME_RAM and the PFP into CP_PFP_UCODE — then writes CP_ME_CNTL = 0 to clear
+// ME_HALT and start it. Word 0 of each blob is a version, and the words after it
+// are the image. This repository carries no Adreno firmware, so the honest thing
+// to have here is the plan for loading it, validated, and not the ring that
+// would need it.
+// ---------------------------------------------------------------------------
+
+enum class CpUcode {
+    Pm4,  // the micro engine's command stream interpreter
+    Pfp,  // the prefetch parser
+};
+
+struct UcodeTarget {
+    u32 addressIndex;  // dword index of the address register
+    u32 dataIndex;     // dword index of the data port
+};
+
+UcodeTarget ucodeTarget(CpUcode which);
+
+struct UcodePlan {
+    u32 addressIndex;
+    u32 dataIndex;
+    const u32 *data;   // the image after its version word
+    u32 dataWords;
+    u32 version;       // word 0 of the blob, as the driver logs it
+};
+
+// Accepts a blob of whole 32-bit words and fills in the plan. A blob with no
+// version word, with nothing after it, or whose version reads all ones (a dead
+// window, not a version) is refused.
+bool planUcodeLoad(const u32 *blob, u32 blobWords, CpUcode which, UcodePlan *plan);
+
+// Register writes the plan costs: one address, then one per image word.
+u32 ucodeWriteCount(const UcodePlan &plan);
+
+// CP_RB_BASE holds the ring's address, which the CP requires aligned to the
+// ring's own size, and the size has to be a power of two.
+bool ringBaseUsable(u32 address, u32 ringBytes);
+
 // A fence is reached when the word the CP wrote has caught up with the value the
 // submission asked for. Counters wrap, so the comparison is signed rather than
 // `>=`: `last` is reached when the 32-bit difference from `target` is

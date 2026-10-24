@@ -12,6 +12,9 @@ rem   g++ -std=c++17 -Wall -Wextra -Werror -I drivers/NativeAdreno418
 rem       drivers/NativeAdreno418/Test/check-adreno-core.cpp drivers/NativeAdreno418/AdrenoCore.cpp
 rem       drivers/NativeAdreno418/IommuCore.cpp drivers/NativeAdreno418/CommandStream.cpp
 rem       -o build/check-adreno-core
+rem   g++ -std=c++17 -Wall -Wextra -Werror -I drivers/NativeMdss
+rem       drivers/NativeMdss/Test/check-mdss-core.cpp drivers/NativeMdss/MdssCore.cpp
+rem       -o build/check-mdss-core
 
 setlocal
 set "VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
@@ -34,3 +37,8 @@ cl /nologo /std:c++17 /EHsc /W4 /WX /I drivers\NativeAdreno418 ^
    drivers\NativeAdreno418\IommuCore.cpp drivers\NativeAdreno418\CommandStream.cpp ^
    /Fe:build\check-adreno-core.exe /Fo:build\ || exit /b 1
 build\check-adreno-core.exe || exit /b 1
+
+cl /nologo /std:c++17 /EHsc /W4 /WX /I drivers\NativeMdss ^
+   drivers\NativeMdss\Test\check-mdss-core.cpp drivers\NativeMdss\MdssCore.cpp ^
+   /Fe:build\check-mdss-core.exe /Fo:build\ || exit /b 1
+build\check-mdss-core.exe || exit /b 1
