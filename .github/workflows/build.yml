@@ -430,11 +430,19 @@ jobs:
           done
 
       - name: Record what the driver compiled against
+        # The archive succeeding is the compile proof, but only if the log says which
+        # members went in: a core that is listed in build-arm-driver.py's sources and
+        # missing from this list is a core that was never compiled for ARM64.
         if: always()
         run: |
-          find "$UNIXNU_OUT" \( -name 'libNativeSdhci.a' -o -name 'libNativeLegacyDisplay.a' \) \
-            -exec shasum -a 256 {} \;
-          grep -h "NativeSdhci\|NativeLegacyDisplay\|archive" "$UNIXNU_OUT"/*/logs/archive-*.log | tail -20 || true
+          find "$UNIXNU_OUT" \( -name 'libNativeSdhci.a' -o -name 'libNativeLegacyDisplay.a' \
+            -o -name 'libNativeAdreno418.a' \) -exec shasum -a 256 {} \;
+          for archive in "$UNIXNU_OUT"/*/tree/build/*/lib*.a; do
+            echo "== $archive"
+            xcrun ar t "$archive" || ar t "$archive" || true
+          done
+          grep -h "NativeSdhci\|NativeAdreno418\|NativeLegacyDisplay\|archive" \
+            "$UNIXNU_OUT"/*/logs/archive-*.log | tail -20 || true
 
 
 
@@ -448,6 +456,7 @@ jobs:
             out/*/tree/build/xnu/ios-obj/*/mach.development.bcm2837
             out/*/tree/build/xnu/ios-obj/*/mach.development.bcm2837.unstripped
             out/*/tree/build/native-sdhci/**
+            out/*/tree/build/native-adreno418/**
             out/*/tree/build/native-legacy-display/**
             out/*/kernel/**
             out/*/logs/**
